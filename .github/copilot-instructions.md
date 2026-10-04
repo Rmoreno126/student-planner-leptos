@@ -37,7 +37,7 @@ Use `use leptos::prelude::*;`, `signal()`, `RwSignal`, `Resource::new`, `Action:
 ## Verify loop (run after every change, in this order)
 Use a separate target dir so you never block the developer's running build:
 
-    export CARGO_TARGET_DIR=target/copilot
+    export CARGO_TARGET_DIR=/tmp/copilot-target
     cargo fmt --all
     cargo check --features ssr
     cargo check --lib --features hydrate --target wasm32-unknown-unknown

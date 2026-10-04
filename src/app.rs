@@ -23,7 +23,7 @@ impl WeeklySchedule {
         self.days
             .get(name)
             .cloned()
-            .unwrap_or_else(|| DaySchedule::default())
+            .unwrap_or_default()
     }
 
     /// Returns the open and blocked slices for a given day.
