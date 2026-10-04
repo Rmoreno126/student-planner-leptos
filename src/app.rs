@@ -133,8 +133,38 @@ pub fn default_weekly_schedule() -> WeeklySchedule {
 
 use std::future::Future;
 
+use leptos_router::hooks::use_query_map;
+
 use crate::api::{add_task, delete_task, list_daily, today_name, toggle_complete, toggle_rollover};
 use crate::model::{NewTask, Priority, Task};
+use crate::slices::{blocked_at, fmt_12h, open_slice_id_at, parse_hhmm};
+
+/// Weekday labels, Monday first.
+const WEEKDAYS: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// Which tab is showing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Daily,
+    Weekly,
+}
+
+/// CSS class for a tab button.
+fn tab_class(active: bool) -> &'static str {
+    if active {
+        "tab-btn active"
+    } else {
+        "tab-btn"
+    }
+}
 
 /// HTML shell wrapped around the app on the server.
 pub fn shell(options: LeptosOptions) -> impl IntoView {
@@ -171,50 +201,99 @@ pub fn App() -> impl IntoView {
     }
 }
 
-/// The planner page: today's slices on one side, today's tasks on the other.
+/// The page frame: tab bar plus whichever tab is active.
 #[component]
 fn HomePage() -> impl IntoView {
-    let day = Resource::new(|| (), |_| today_name());
+    let tab = RwSignal::new(Tab::Daily);
 
     view! {
-        <main class="planner-shell">
-            <header class="planner-header">
-                <p class="eyebrow">"Daily rhythm"</p>
-                <h1>"Student Planner"</h1>
-            </header>
-            <section class="planner-grid">
-                <Suspense fallback=|| view! { <p>"Loading schedule..."</p> }>
-                    {move || Suspend::new(async move {
-                        let name = day.await.unwrap_or_else(|_| "Monday".to_string());
-                        let slices = default_weekly_schedule().slices_for(&name);
-                        view! { <SlicePanel day=name slices=slices/> }
-                    })}
-                </Suspense>
-                <TaskPanel/>
-            </section>
+        <div class="app-container">
+            <nav class="nav-tabs">
+                <button
+                    class=move || tab_class(tab.get() == Tab::Daily)
+                    on:click=move |_| tab.set(Tab::Daily)
+                >
+                    <span class="tab-icon">"📋"</span>
+                    " Daily Tasks"
+                </button>
+                <button
+                    class=move || tab_class(tab.get() == Tab::Weekly)
+                    on:click=move |_| tab.set(Tab::Weekly)
+                >
+                    <span class="tab-icon blue-icon">"⚙️"</span>
+                    " Weekly Schedule"
+                </button>
+            </nav>
+            {move || match tab.get() {
+                Tab::Daily => view! { <DailyView/> }.into_any(),
+                Tab::Weekly => view! { <WeeklyView/> }.into_any(),
+            }}
+        </div>
+    }
+}
+
+/// Looks up today's weekday (Pacific time), then shows the plan for it.
+/// Add `?day=Monday` to the address to preview another weekday's layout.
+#[component]
+fn DailyView() -> impl IntoView {
+    let query = use_query_map();
+    let day = Resource::new(
+        move || query.get().get("day"),
+        |preview| async move {
+            match preview {
+                Some(name) if WEEKDAYS.contains(&name.as_str()) => {
+                    Ok::<String, ServerFnError>(name)
+                }
+                _ => today_name().await,
+            }
+        },
+    );
+
+    view! {
+        <main class="tab-content active">
+            <Suspense fallback=|| view! { <p>"Loading..."</p> }>
+                {move || Suspend::new(async move {
+                    let name = day.await.unwrap_or_else(|_| "Monday".to_string());
+                    view! { <DayPlan name=name/> }
+                })}
+            </Suspense>
         </main>
     }
 }
 
-/// Lists the day's open and blocked slices.
+/// Header, add-task form, and the slice board for one weekday.
 #[component]
-fn SlicePanel(day: String, slices: Vec<Slice>) -> impl IntoView {
+fn DayPlan(name: String) -> impl IntoView {
+    let schedule = default_weekly_schedule();
+    let slices = schedule.slices_for(&name);
+    let wake = schedule.wake_time;
+    let form_slices = slices.clone();
+
+    let refresh = RwSignal::new(0u32);
+    let error = RwSignal::new(None::<String>);
+    let tasks = Resource::new(move || refresh.get(), |_| list_daily());
+
     view! {
-        <article class="planner-panel">
-            <div class="panel-header">
-                <h2>{day}</h2>
-                <span class="badge">"Focus Slices"</span>
-            </div>
-            <ul class="slice-list">
-                {slices
-                    .into_iter()
-                    .map(|slice| {
-                        let class = if slice.kind == SliceKind::Blocked { "blocked" } else { "" };
-                        view! { <li class=class><span class="label">{slice.label}</span></li> }
-                    })
-                    .collect::<Vec<_>>()}
-            </ul>
-        </article>
+        <div class="header-row">
+            <h2>"Today's Plan"</h2>
+            <span class="day-badge">{name}</span>
+        </div>
+        <AddTaskForm slices=form_slices wake=wake refresh=refresh error=error/>
+        {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+        <Suspense fallback=|| view! { <p>"Loading tasks..."</p> }>
+            {move || {
+                let slices = slices.clone();
+                Suspend::new(async move {
+                    match tasks.await {
+                        Ok(list) => view! {
+                            <SliceBoard slices=slices tasks=list refresh=refresh error=error/>
+                        }
+                        .into_any(),
+                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                    }
+                })
+            }}
+        </Suspense>
     }
 }
 
@@ -236,100 +315,204 @@ where
     });
 }
 
-/// Today's tasks, loaded from the database.
+/// Title box, start time, priority picker, and the Add button.
 #[component]
-fn TaskPanel() -> impl IntoView {
-    let refresh = RwSignal::new(0u32);
-    let error = RwSignal::new(None::<String>);
-    let tasks = Resource::new(move || refresh.get(), |_| list_daily());
-
-    view! {
-        <article class="planner-panel">
-            <div class="panel-header">
-                <h2>"Today's Tasks"</h2>
-            </div>
-            <AddTaskForm refresh=refresh error=error/>
-            {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
-            <Suspense fallback=|| view! { <p>"Loading tasks..."</p> }>
-                {move || Suspend::new(async move {
-                    match tasks.await {
-                        Ok(list) if list.is_empty() => {
-                            view! { <p class="empty">"Nothing planned yet."</p> }.into_any()
-                        }
-                        Ok(list) => view! {
-                            <ul class="task-list">
-                                {list
-                                    .into_iter()
-                                    .map(|task| view! { <TaskRow task=task refresh=refresh error=error/> })
-                                    .collect::<Vec<_>>()}
-                            </ul>
-                        }
-                        .into_any(),
-                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
-                    }
-                })}
-            </Suspense>
-        </article>
-    }
-}
-
-/// Title box, priority picker, and the Add button.
-#[component]
-fn AddTaskForm(refresh: RwSignal<u32>, error: RwSignal<Option<String>>) -> impl IntoView {
+fn AddTaskForm(
+    slices: Vec<Slice>,
+    wake: u32,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
     let title = RwSignal::new(String::new());
+    let start = RwSignal::new(String::new());
     let priority = RwSignal::new(Priority::High);
 
-    let submit = move |_| {
+    let submit = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
         let text = title.get_untracked();
         if text.trim().is_empty() {
             return;
         }
+        let minutes = parse_hhmm(&start.get_untracked());
+        if let Some(t) = minutes {
+            if let Some(block) = blocked_at(&slices, t, wake) {
+                error.set(Some(format!(
+                    "That time falls in a blocked window: {}",
+                    block.label
+                )));
+                return;
+            }
+        }
+        let slice_id = minutes
+            .and_then(|t| open_slice_id_at(&slices, t, wake))
+            .map(str::to_string);
         let new = NewTask {
             title: text,
             notes: String::new(),
             priority: priority.get_untracked(),
             due_date: None,
-            slice_id: None,
-            start_time: None,
+            slice_id,
+            start_time: minutes,
         };
         title.set(String::new());
         run(refresh, error, add_task(new));
     };
 
     view! {
-        <div class="task-entry">
+        <form class="task-form" on:submit=submit>
             <input
                 type="text"
+                class="task-input"
                 placeholder="What needs to be done?"
                 prop:value=move || title.get()
                 on:input=move |ev| title.set(event_target_value(&ev))
             />
-            <select on:change=move |ev| {
-                let chosen = match event_target_value(&ev).as_str() {
-                    "1" => Priority::Low,
-                    "2" => Priority::Medium,
-                    _ => Priority::High,
-                };
-                priority.set(chosen);
-            }>
-                <option value="3">"High"</option>
-                <option value="2">"Medium"</option>
-                <option value="1">"Low"</option>
-            </select>
-            <button on:click=submit>"Add Task"</button>
-        </div>
+            <div class="form-controls">
+                <div class="time-picker-wrapper">
+                    <label class="input-inline-label">"Start Time:"</label>
+                    <input
+                        type="time"
+                        class="task-select time-input"
+                        prop:value=move || start.get()
+                        on:input=move |ev| start.set(event_target_value(&ev))
+                    />
+                </div>
+                <select
+                    class="task-select"
+                    on:change=move |ev| {
+                        let chosen = match event_target_value(&ev).as_str() {
+                            "1" => Priority::Low,
+                            "2" => Priority::Medium,
+                            _ => Priority::High,
+                        };
+                        priority.set(chosen);
+                    }
+                >
+                    <option value="3">"High"</option>
+                    <option value="2">"Med"</option>
+                    <option value="1">"Low"</option>
+                </select>
+                <button type="submit" class="btn-primary add-btn">"Add Task"</button>
+            </div>
+        </form>
     }
 }
 
-/// One task: checkbox, title, priority badge, rollover and delete buttons.
+/// One card per slice, then unassigned tasks, then the completed card.
+#[component]
+fn SliceBoard(
+    slices: Vec<Slice>,
+    tasks: Vec<Task>,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let (mut done, mut active): (Vec<Task>, Vec<Task>) =
+        tasks.into_iter().partition(|t| t.completed);
+    active.sort_by_key(|t| (t.start_time.unwrap_or(u32::MAX), t.id));
+    done.sort_by_key(|t| (t.start_time.unwrap_or(u32::MAX), t.id));
+
+    let open_ids: Vec<String> = slices
+        .iter()
+        .filter(|s| s.kind == SliceKind::Open)
+        .map(|s| s.id.clone())
+        .collect();
+    // A task belongs to its slice only if that slice exists today.
+    let target = |t: &Task| -> Option<String> {
+        match &t.slice_id {
+            Some(id) if open_ids.contains(id) => Some(id.clone()),
+            _ => None,
+        }
+    };
+
+    let cards = slices
+        .iter()
+        .map(|slice| {
+            if slice.kind == SliceKind::Blocked {
+                view! {
+                    <div class="slice-card blocked">
+                        <div class="slice-header">
+                            <span class="slice-title">{slice.label.clone()}</span>
+                        </div>
+                        <p class="blocked-text">"🔒 Tasks cannot be assigned during this period."</p>
+                    </div>
+                }
+                .into_any()
+            } else {
+                let mine: Vec<Task> = active
+                    .iter()
+                    .filter(|t| target(t).as_deref() == Some(slice.id.as_str()))
+                    .cloned()
+                    .collect();
+                view! {
+                    <div class="slice-card">
+                        <div class="slice-header">
+                            <span class="slice-title">{slice.label.clone()}</span>
+                        </div>
+                        <TaskList tasks=mine refresh=refresh error=error/>
+                    </div>
+                }
+                .into_any()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let loose: Vec<Task> = active
+        .iter()
+        .filter(|t| target(t).is_none())
+        .cloned()
+        .collect();
+    let loose_card = (!loose.is_empty()).then(|| {
+        view! {
+            <div class="slice-card">
+                <div class="slice-header">
+                    <span class="slice-title">"📌 Unassigned Tasks"</span>
+                </div>
+                <TaskList tasks=loose refresh=refresh error=error/>
+            </div>
+        }
+    });
+
+    let done_card = (!done.is_empty()).then(|| {
+        view! {
+            <div class="completed-card">
+                <h3 class="completed-header">"✓ Completed Tasks"</h3>
+                <TaskList tasks=done refresh=refresh error=error/>
+            </div>
+        }
+    });
+
+    view! {
+        <div class="slices-wrapper">{cards}{loose_card}</div>
+        {done_card}
+    }
+}
+
+/// A list of task rows.
+#[component]
+fn TaskList(
+    tasks: Vec<Task>,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    view! {
+        <ul class="task-list">
+            {tasks
+                .into_iter()
+                .map(|task| view! { <TaskRow task=task refresh=refresh error=error/> })
+                .collect::<Vec<_>>()}
+        </ul>
+    }
+}
+
+/// One task: checkbox, title, time, priority, rollover and delete buttons.
 #[component]
 fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) -> impl IntoView {
     let id = task.id;
     let completed = task.completed;
     let item_class = format!(
-        "task-item {} {}",
-        if task.completed { "completed" } else { "" },
-        if task.rollover { "is-rollover" } else { "" }
+        "task-item{}{}",
+        if task.completed { " completed" } else { "" },
+        if task.rollover { " is-rollover" } else { "" }
     );
     let rollover_class = if task.rollover {
         "icon-btn rollover-btn active"
@@ -338,32 +521,105 @@ fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) 
     };
     let badge_class = format!("priority-badge prio-{}", task.priority.code());
     let label = task.priority.label();
+    let time_badge = task.start_time.map(|t| format!("🕒 {}", fmt_12h(t)));
     let title = task.title;
 
     view! {
         <li class=item_class>
-            <input
-                type="checkbox"
-                checked=completed
-                on:change=move |_| run(refresh, error, toggle_complete(id))
-            />
-            <span class="task-title">{title}</span>
-            <span class=badge_class>{label}</span>
-            <button
-                class=rollover_class
-                title="Roll over to tomorrow"
-                on:click=move |_| run(refresh, error, toggle_rollover(id))
-            >
-                "➔"
-            </button>
-            <button
-                class="icon-btn"
-                title="Delete"
-                on:click=move |_| run(refresh, error, delete_task(id))
-            >
-                "✖"
-            </button>
+            <div class="task-item-main">
+                <input
+                    type="checkbox"
+                    class="checkbox"
+                    checked=completed
+                    on:change=move |_| run(refresh, error, toggle_complete(id))
+                />
+                <span class="task-title">{title}</span>
+                {time_badge.map(|text| view! { <span class="task-time-badge">{text}</span> })}
+                <span class=badge_class>{label}</span>
+                <div class="task-actions">
+                    <button
+                        class=rollover_class
+                        title="Rollover to tomorrow"
+                        on:click=move |_| run(refresh, error, toggle_rollover(id))
+                    >
+                        "➔"
+                    </button>
+                    <button
+                        class="icon-btn delete-btn"
+                        title="Delete"
+                        on:click=move |_| run(refresh, error, delete_task(id))
+                    >
+                        "✖"
+                    </button>
+                </div>
+            </div>
         </li>
+    }
+}
+
+/// Read-only view of the weekly schedule (the editor comes later).
+#[component]
+fn WeeklyView() -> impl IntoView {
+    let schedule = default_weekly_schedule();
+    let summary = format!(
+        "Wake {} · Bedtime {}.",
+        fmt_12h(schedule.wake_time),
+        fmt_12h(schedule.sleep_time)
+    );
+    let cards = WEEKDAYS
+        .iter()
+        .map(|name| {
+            let day = schedule.day_for(name);
+            let mut lines: Vec<String> = day
+                .blocks
+                .iter()
+                .map(|b| format!("{}: {} - {}", b.label, fmt_12h(b.start), fmt_12h(b.end)))
+                .collect();
+            lines.extend(
+                day.divisions
+                    .iter()
+                    .map(|d| format!("Split at {}", fmt_12h(*d))),
+            );
+            let body = if lines.is_empty() {
+                view! { <p class="blocked-text">"Open all day"</p> }.into_any()
+            } else {
+                view! {
+                    <ul class="task-list">
+                        {lines
+                            .into_iter()
+                            .map(|line| {
+                                view! {
+                                    <li class="task-item">
+                                        <div class="task-item-main">
+                                            <span class="task-title">{line}</span>
+                                        </div>
+                                    </li>
+                                }
+                            })
+                            .collect::<Vec<_>>()}
+                    </ul>
+                }
+                .into_any()
+            };
+            view! {
+                <div class="settings-card">
+                    <div class="slice-header">
+                        <span class="slice-title">{*name}</span>
+                    </div>
+                    {body}
+                </div>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    view! {
+        <main class="tab-content active">
+            <div class="header-row">
+                <h2>"Weekly Recurring Schedule"</h2>
+            </div>
+            <p class="settings-subtitle">{summary}" The editor is coming next."</p>
+            <div class="slices-wrapper">{cards}</div>
+        </main>
     }
 }
 
