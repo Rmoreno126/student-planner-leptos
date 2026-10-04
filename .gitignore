@@ -12,3 +12,4 @@ target/
 *.pdb
 draft/
 .env
+rustc-ice-*.txt
