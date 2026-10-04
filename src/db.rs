@@ -183,3 +183,11 @@ pub async fn delete(pool: &PgPool, id: i64) -> Result<bool, sqlx::Error> {
         .await?;
     Ok(done.rows_affected() > 0)
 }
+
+/// Weekday name (for example `Monday`) in [`APP_TZ`].
+pub async fn weekday(pool: &PgPool) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT to_char(now() AT TIME ZONE $1::text, 'FMDay')")
+        .bind(APP_TZ)
+        .fetch_one(pool)
+        .await
+}

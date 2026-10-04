@@ -111,3 +111,19 @@ async fn move_to_slice_and_delete(pool: PgPool) -> sqlx::Result<()> {
     assert!(!db::delete(&pool, task.id).await?);
     Ok(())
 }
+
+#[sqlx::test]
+async fn weekday_is_a_day_name(pool: PgPool) -> sqlx::Result<()> {
+    let day = db::weekday(&pool).await?;
+    let days = [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ];
+    assert!(days.contains(&day.as_str()));
+    Ok(())
+}

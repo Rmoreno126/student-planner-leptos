@@ -92,3 +92,9 @@ pub async fn delete_task(id: i64) -> Result<(), ServerFnError> {
         Err(missing())
     }
 }
+
+/// Today's weekday name in the app time zone, for example `Monday`.
+#[server]
+pub async fn today_name() -> Result<String, ServerFnError> {
+    crate::db::weekday(pool()?).await.map_err(fail)
+}

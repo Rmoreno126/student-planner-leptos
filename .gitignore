@@ -13,3 +13,4 @@ target/
 draft/
 .env
 rustc-ice-*.txt
+/target
