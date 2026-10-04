@@ -1,6 +1,12 @@
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
+    student_planner_leptos::db::init()
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("database init failed: {e}");
+            std::process::exit(1)
+        });
     use axum::Router;
     use leptos::logging::log;
     use leptos::prelude::*;

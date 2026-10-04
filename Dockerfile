@@ -1,13 +1,26 @@
-FROM rust:bookworm AS builder
+FROM debian:bookworm AS builder
 
 WORKDIR /app
 
-RUN rustup toolchain install nightly --profile minimal \
-    && rustup target add wasm32-unknown-unknown --toolchain nightly \
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y build-essential ca-certificates curl git libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN curl --fail --location --silent --show-error https://sh.rustup.rs --output /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --no-modify-path --default-toolchain none \
+    && rm /tmp/rustup-init.sh
+
+COPY rust-toolchain.toml ./
+
+RUN rustup toolchain install nightly-2026-10-03 --profile minimal \
+    && rustup target add wasm32-unknown-unknown --toolchain nightly-2026-10-03 \
+    && rustc --version | grep -F 0abfedbc7 \
     && curl --fail --location --silent --show-error \
         --output /tmp/cargo-binstall.tgz \
         https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-unknown-linux-gnu.tgz \
-    && tar -xzf /tmp/cargo-binstall.tgz -C /usr/local/cargo/bin cargo-binstall \
+    && tar -xzf /tmp/cargo-binstall.tgz -C /root/.cargo/bin cargo-binstall \
     && rm /tmp/cargo-binstall.tgz \
     && cargo binstall cargo-leptos --version 0.3.11 --no-confirm
 

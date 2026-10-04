@@ -1,6 +1,10 @@
 #![recursion_limit = "256"]
 
+pub mod api;
 pub mod checklist;
+#[cfg(feature = "ssr")]
+pub mod db;
+pub mod model;
 pub mod slices;
 
 pub mod app;

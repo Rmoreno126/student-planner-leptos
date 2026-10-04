@@ -20,10 +20,7 @@ pub struct WeeklySchedule {
 impl WeeklySchedule {
     /// Returns the day schedule for a weekday label.
     pub fn day_for(&self, name: &str) -> DaySchedule {
-        self.days
-            .get(name)
-            .cloned()
-            .unwrap_or_default()
+        self.days.get(name).cloned().unwrap_or_default()
     }
 
     /// Returns the open and blocked slices for a given day.
