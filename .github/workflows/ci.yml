@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          target: wasm32-unknown-unknown
+          components: rustfmt, clippy
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all
+      - run: cargo check --features ssr
+      - run: cargo check --lib --features hydrate --target wasm32-unknown-unknown
+      - run: cargo clippy --features ssr -- -D warnings
+      - run: cargo test --lib --features ssr

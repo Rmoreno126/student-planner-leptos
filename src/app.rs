@@ -197,7 +197,7 @@ pub fn App() -> impl IntoView {
                             <span class="badge">"Focus Slices"</span>
                         </div>
                         <ul class="slice-list">
-                            <For each=move || slices.clone() let:slice>
+                            <For each=move || slices.clone() key=|slice| slice.id.clone() let:slice>
                                 <li class:blocked={move || slice.kind == SliceKind::Blocked}>
                                     <span class="label">{slice.label.clone()}</span>
                                 </li>
@@ -225,7 +225,7 @@ pub fn App() -> impl IntoView {
                         </div>
 
                         <ul class="task-list">
-                            <For each=move || tasks.get() let:task>
+                            <For each=move || tasks.get() key=|task| task.clone() let:task>
                                 <li>{task}</li>
                             </For>
                         </ul>

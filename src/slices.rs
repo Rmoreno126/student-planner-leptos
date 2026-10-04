@@ -10,7 +10,7 @@ pub struct Block {
     pub end: u32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DaySchedule {
     pub blocks: Vec<Block>,
     pub divisions: Vec<u32>,
