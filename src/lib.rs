@@ -9,8 +9,10 @@ pub mod editor_modal;
 pub mod history_view;
 pub mod model;
 pub mod notes;
+pub mod schedule_view;
 pub mod slices;
 pub mod snippets;
+pub mod timeline;
 
 pub mod app;
 

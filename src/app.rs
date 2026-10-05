@@ -136,25 +136,16 @@ use std::future::Future;
 use leptos_router::hooks::use_query_map;
 
 use crate::api::{
-    add_task, delete_task, list_daily, today_name, toggle_complete, toggle_rollover, update_task,
+    add_task, delete_task, get_day, list_daily, toggle_complete, toggle_rollover, update_task,
 };
 use crate::checklist::{checklist_progress, toggle_checkbox};
 use crate::editor_modal::{blank_task, EditModal};
 use crate::history_view::HistoryView;
-use crate::model::{NewTask, Priority, Task, TaskUpdate};
+use crate::model::{DayData, NewTask, Priority, Task, TaskUpdate};
 use crate::notes::{render_markdown, split_notes, NoteBlock};
+use crate::schedule_view::ScheduleEditor;
 use crate::slices::{blocked_at, fmt_12h, open_slice_id_at, parse_hhmm};
-
-/// Weekday labels, Monday first.
-const WEEKDAYS: [&str; 7] = [
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-    "Sunday",
-];
+use crate::timeline::BlockedTimeline;
 
 /// Which tab is showing.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -240,36 +231,28 @@ fn HomePage() -> impl IntoView {
             </nav>
             {move || match tab.get() {
                 Tab::Daily => view! { <DailyView/> }.into_any(),
-                Tab::Weekly => view! { <WeeklyView/> }.into_any(),
+                Tab::Weekly => view! { <ScheduleEditor/> }.into_any(),
                 Tab::History => view! { <HistoryView/> }.into_any(),
             }}
         </div>
     }
 }
 
-/// Looks up today's weekday (Pacific time), then shows the plan for it.
+/// Loads the day's blocks and wake/bed times, then shows the plan.
 /// Add `?day=Monday` to the address to preview another weekday's layout.
 #[component]
 fn DailyView() -> impl IntoView {
     let query = use_query_map();
-    let day = Resource::new(
-        move || query.get().get("day"),
-        |preview| async move {
-            match preview {
-                Some(name) if WEEKDAYS.contains(&name.as_str()) => {
-                    Ok::<String, ServerFnError>(name)
-                }
-                _ => today_name().await,
-            }
-        },
-    );
+    let day = Resource::new(move || query.get().get("day"), get_day);
 
     view! {
         <main class="tab-content active">
             <Suspense fallback=|| view! { <p>"Loading..."</p> }>
                 {move || Suspend::new(async move {
-                    let name = day.await.unwrap_or_else(|_| "Monday".to_string());
-                    view! { <DayPlan name=name/> }
+                    match day.await {
+                        Ok(data) => view! { <DayPlan data=data/> }.into_any(),
+                        Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
+                    }
                 })}
             </Suspense>
         </main>
@@ -278,10 +261,22 @@ fn DailyView() -> impl IntoView {
 
 /// Header, add-task form, slice board, and edit dialog for one weekday.
 #[component]
-fn DayPlan(name: String) -> impl IntoView {
-    let schedule = default_weekly_schedule();
-    let slices = schedule.slices_for(&name);
-    let wake = schedule.wake_time;
+fn DayPlan(data: DayData) -> impl IntoView {
+    let wake = data.wake;
+    let day_schedule = DaySchedule {
+        blocks: data
+            .blocks
+            .iter()
+            .map(|b| Block {
+                label: b.label.clone(),
+                start: b.start,
+                end: b.end,
+            })
+            .collect(),
+        divisions: data.divisions.clone(),
+    };
+    let slices = compute_slices(data.wake, data.sleep, &day_schedule);
+    let name = data.name;
     let form_slices = slices.clone();
     let modal_slices = slices.clone();
 
@@ -474,7 +469,7 @@ fn SliceBoard(
                         <div class="slice-header">
                             <span class="slice-title">{slice.label.clone()}</span>
                         </div>
-                        <p class="blocked-text">"🔒 Tasks cannot be assigned during this period."</p>
+                        <BlockedTimeline start=slice.start end=slice.end/>
                     </div>
                 }
                 .into_any()
@@ -671,72 +666,6 @@ fn NotesView(
         .collect::<Vec<_>>();
 
     view! { <div class="task-notes-rendered">{rows}</div> }
-}
-
-/// Read-only view of the weekly schedule (the editor comes later).
-#[component]
-fn WeeklyView() -> impl IntoView {
-    let schedule = default_weekly_schedule();
-    let summary = format!(
-        "Wake {} · Bedtime {}.",
-        fmt_12h(schedule.wake_time),
-        fmt_12h(schedule.sleep_time)
-    );
-    let cards = WEEKDAYS
-        .iter()
-        .map(|name| {
-            let day = schedule.day_for(name);
-            let mut lines: Vec<String> = day
-                .blocks
-                .iter()
-                .map(|b| format!("{}: {} - {}", b.label, fmt_12h(b.start), fmt_12h(b.end)))
-                .collect();
-            lines.extend(
-                day.divisions
-                    .iter()
-                    .map(|d| format!("Split at {}", fmt_12h(*d))),
-            );
-            let body = if lines.is_empty() {
-                view! { <p class="blocked-text">"Open all day"</p> }.into_any()
-            } else {
-                view! {
-                    <ul class="task-list">
-                        {lines
-                            .into_iter()
-                            .map(|line| {
-                                view! {
-                                    <li class="task-item">
-                                        <div class="task-item-main">
-                                            <span class="task-title">{line}</span>
-                                        </div>
-                                    </li>
-                                }
-                            })
-                            .collect::<Vec<_>>()}
-                    </ul>
-                }
-                .into_any()
-            };
-            view! {
-                <div class="settings-card">
-                    <div class="slice-header">
-                        <span class="slice-title">{*name}</span>
-                    </div>
-                    {body}
-                </div>
-            }
-        })
-        .collect::<Vec<_>>();
-
-    view! {
-        <main class="tab-content active">
-            <div class="header-row">
-                <h2>"Weekly Recurring Schedule"</h2>
-            </div>
-            <p class="settings-subtitle">{summary}" The editor is coming next."</p>
-            <div class="slices-wrapper">{cards}</div>
-        </main>
-    }
 }
 
 #[cfg(test)]

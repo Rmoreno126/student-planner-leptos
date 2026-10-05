@@ -1,6 +1,8 @@
 //! Server functions: the browser calls these, the server runs them.
 
-use crate::model::{History, NewTask, Task, TaskUpdate};
+use crate::model::{
+    DayData, History, NewBlock, NewTask, Schedule, ScheduleBlock, Split, Task, TaskUpdate,
+};
 use leptos::prelude::*;
 
 #[cfg(feature = "ssr")]
@@ -148,4 +150,90 @@ pub async fn save_toolbar(ids: String) -> Result<String, ServerFnError> {
         .await
         .map_err(fail)?;
     Ok(clean)
+}
+
+/// The blocked windows, split times, and wake/bed times for one day.
+/// `preview` (a weekday name) lets the page show another day's layout.
+#[server]
+pub async fn get_day(preview: Option<String>) -> Result<DayData, ServerFnError> {
+    let pool = pool()?;
+    let today_name = crate::db::weekday(pool).await.map_err(fail)?;
+    let today = crate::db::today(pool).await.map_err(fail)?;
+    let chosen = preview
+        .filter(|name| crate::model::weekday_index(name).is_some())
+        .unwrap_or_else(|| today_name.clone());
+    let index = crate::model::weekday_index(&chosen).unwrap_or(0);
+    let date = (chosen == today_name).then_some(today.as_str());
+    let schedule = crate::db::get_schedule(pool).await.map_err(fail)?;
+    Ok(schedule.day(&chosen, index, date))
+}
+
+/// The whole schedule for the Weekly Schedule tab.
+#[server]
+pub async fn get_schedule() -> Result<Schedule, ServerFnError> {
+    crate::db::get_schedule(pool()?).await.map_err(fail)
+}
+
+/// Adds a weekly or one-time blocked window.
+#[server]
+pub async fn add_block(new: NewBlock) -> Result<ScheduleBlock, ServerFnError> {
+    new.validate().map_err(fail)?;
+    crate::db::insert_block(pool()?, &new).await.map_err(fail)
+}
+
+/// Changes a block's name and times.
+#[server]
+pub async fn update_block(
+    id: i64,
+    label: String,
+    start: u32,
+    end: u32,
+) -> Result<ScheduleBlock, ServerFnError> {
+    crate::model::check_block(&label, start, end).map_err(fail)?;
+    let block = crate::db::update_block(pool()?, id, label.trim(), start, end)
+        .await
+        .map_err(fail)?;
+    block.ok_or_else(|| fail("block not found"))
+}
+
+/// Removes a block.
+#[server]
+pub async fn delete_block(id: i64) -> Result<(), ServerFnError> {
+    if crate::db::delete_block(pool()?, id).await.map_err(fail)? {
+        Ok(())
+    } else {
+        Err(fail("block not found"))
+    }
+}
+
+/// Adds a split time for a weekday.
+#[server]
+pub async fn add_split(weekday: u8, at: u32) -> Result<Split, ServerFnError> {
+    if weekday > 6 || at > 1439 {
+        return Err(fail("That split time is out of range"));
+    }
+    crate::db::insert_split(pool()?, weekday, at)
+        .await
+        .map_err(fail)
+}
+
+/// Removes a split time.
+#[server]
+pub async fn delete_split(id: i64) -> Result<(), ServerFnError> {
+    if crate::db::delete_split(pool()?, id).await.map_err(fail)? {
+        Ok(())
+    } else {
+        Err(fail("split not found"))
+    }
+}
+
+/// Saves wake-up time and bedtime.
+#[server]
+pub async fn save_day_limits(wake: u32, sleep: u32) -> Result<(), ServerFnError> {
+    if wake > 1439 || sleep > 1439 || wake == sleep {
+        return Err(fail("Pick a wake-up time and a different bedtime"));
+    }
+    crate::db::save_day_limits(pool()?, wake, sleep)
+        .await
+        .map_err(fail)
 }

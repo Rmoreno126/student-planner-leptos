@@ -198,3 +198,74 @@ async fn settings_round_trip(pool: PgPool) -> sqlx::Result<()> {
     );
     Ok(())
 }
+
+use student_planner_leptos::model::NewBlock;
+
+#[sqlx::test]
+async fn the_real_timetable_is_preloaded(pool: PgPool) -> sqlx::Result<()> {
+    let blocks = db::list_blocks(&pool).await?;
+    let count = |day: u8| blocks.iter().filter(|b| b.weekday == Some(day)).count();
+    assert_eq!(
+        [count(0), count(1), count(2), count(3), count(4), count(5)],
+        [3, 3, 2, 2, 2, 0]
+    );
+    let monday: Vec<&str> = blocks
+        .iter()
+        .filter(|b| b.weekday == Some(0))
+        .map(|b| b.label.as_str())
+        .collect();
+    assert_eq!(
+        monday,
+        vec!["MATH 107 lecture", "CS 374 activity", "CS 453 lecture"]
+    );
+    Ok(())
+}
+
+#[sqlx::test]
+async fn blocks_can_be_added_edited_and_removed(pool: PgPool) -> sqlx::Result<()> {
+    let shift = db::insert_block(
+        &pool,
+        &NewBlock {
+            label: "Barista shift".into(),
+            weekday: None,
+            on_date: Some("2026-10-08".into()),
+            start: 840,
+            end: 1080,
+        },
+    )
+    .await?;
+    assert_eq!(shift.on_date.as_deref(), Some("2026-10-08"));
+    assert_eq!(shift.weekday, None);
+    let moved = db::update_block(&pool, shift.id, "Closing shift", 900, 1140)
+        .await?
+        .expect("block exists");
+    assert_eq!(
+        (moved.label.as_str(), moved.start, moved.end),
+        ("Closing shift", 900, 1140)
+    );
+    assert!(db::delete_block(&pool, shift.id).await?);
+    assert!(!db::delete_block(&pool, shift.id).await?);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn splits_are_unique_per_day_and_removable(pool: PgPool) -> sqlx::Result<()> {
+    let first = db::insert_split(&pool, 5, 780).await?;
+    let again = db::insert_split(&pool, 5, 780).await?;
+    assert_eq!(first.id, again.id);
+    db::insert_split(&pool, 5, 900).await?;
+    assert_eq!(db::list_splits(&pool).await?.len(), 2);
+    assert!(db::delete_split(&pool, first.id).await?);
+    assert_eq!(db::list_splits(&pool).await?.len(), 1);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn day_limits_default_then_save(pool: PgPool) -> sqlx::Result<()> {
+    assert_eq!(db::day_limits(&pool).await?, (480, 1320));
+    db::save_day_limits(&pool, 420, 1380).await?;
+    assert_eq!(db::day_limits(&pool).await?, (420, 1380));
+    let schedule = db::get_schedule(&pool).await?;
+    assert_eq!((schedule.wake, schedule.sleep), (420, 1380));
+    Ok(())
+}

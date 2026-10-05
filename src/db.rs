@@ -1,7 +1,7 @@
 //! Server-only database access (Postgres through SQLx).
 //! Every query function takes the pool as an argument so it can be tested directly.
 
-use crate::model::{NewTask, Priority, Task, TaskUpdate};
+use crate::model::{NewBlock, NewTask, Priority, Schedule, ScheduleBlock, Split, Task, TaskUpdate};
 use sqlx::{postgres::PgPoolOptions, FromRow, PgPool};
 use std::sync::OnceLock;
 
@@ -276,4 +276,164 @@ pub async fn set_setting(pool: &PgPool, key: &str, value: &str) -> Result<(), sq
     .execute(pool)
     .await?;
     Ok(())
+}
+
+#[derive(FromRow)]
+struct BlockRow {
+    id: i64,
+    label: String,
+    weekday: Option<i16>,
+    on_date: Option<String>,
+    start_time: i32,
+    end_time: i32,
+}
+
+impl From<BlockRow> for ScheduleBlock {
+    fn from(r: BlockRow) -> Self {
+        ScheduleBlock {
+            id: r.id,
+            label: r.label,
+            weekday: r.weekday.and_then(|d| u8::try_from(d).ok()),
+            on_date: r.on_date,
+            start: u32::try_from(r.start_time).unwrap_or(0),
+            end: u32::try_from(r.end_time).unwrap_or(0),
+        }
+    }
+}
+
+#[derive(FromRow)]
+struct SplitRow {
+    id: i64,
+    weekday: i16,
+    at_time: i32,
+}
+
+impl From<SplitRow> for Split {
+    fn from(r: SplitRow) -> Self {
+        Split {
+            id: r.id,
+            weekday: u8::try_from(r.weekday).unwrap_or(0),
+            at: u32::try_from(r.at_time).unwrap_or(0),
+        }
+    }
+}
+
+const BLOCK_COLUMNS: &str = "id, label, weekday, on_date::text AS on_date, start_time, end_time";
+
+/// Every blocked window: weekly ones first (Monday to Sunday), then one-time ones by date.
+pub async fn list_blocks(pool: &PgPool) -> Result<Vec<ScheduleBlock>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {BLOCK_COLUMNS} FROM schedule_blocks \
+         ORDER BY weekday NULLS LAST, on_date, start_time, id"
+    );
+    let rows = sqlx::query_as::<_, BlockRow>(&sql).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(ScheduleBlock::from).collect())
+}
+
+/// Split times that divide a weekday's open time into separate slices.
+pub async fn list_splits(pool: &PgPool) -> Result<Vec<Split>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, SplitRow>(
+        "SELECT id, weekday, at_time FROM schedule_splits ORDER BY weekday, at_time",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(Split::from).collect())
+}
+
+/// Wake-up time and bedtime in minutes since midnight (defaults: 8:00 AM and 10:00 PM).
+pub async fn day_limits(pool: &PgPool) -> Result<(u32, u32), sqlx::Error> {
+    let read = |value: Option<String>, default: u32| {
+        value.and_then(|v| v.parse::<u32>().ok()).unwrap_or(default)
+    };
+    let wake = read(get_setting(pool, "wake").await?, 480);
+    let sleep = read(get_setting(pool, "sleep").await?, 1320);
+    Ok((wake, sleep))
+}
+
+/// Saves wake-up time and bedtime.
+pub async fn save_day_limits(pool: &PgPool, wake: u32, sleep: u32) -> Result<(), sqlx::Error> {
+    set_setting(pool, "wake", &wake.to_string()).await?;
+    set_setting(pool, "sleep", &sleep.to_string()).await
+}
+
+/// The whole schedule: day limits, blocks, and splits.
+pub async fn get_schedule(pool: &PgPool) -> Result<Schedule, sqlx::Error> {
+    let (wake, sleep) = day_limits(pool).await?;
+    Ok(Schedule {
+        wake,
+        sleep,
+        blocks: list_blocks(pool).await?,
+        splits: list_splits(pool).await?,
+    })
+}
+
+/// Adds a weekly or one-time block.
+pub async fn insert_block(pool: &PgPool, new: &NewBlock) -> Result<ScheduleBlock, sqlx::Error> {
+    let sql = format!(
+        "INSERT INTO schedule_blocks (label, weekday, on_date, start_time, end_time) \
+         VALUES ($1, $2, $3::date, $4, $5) RETURNING {BLOCK_COLUMNS}"
+    );
+    let row = sqlx::query_as::<_, BlockRow>(&sql)
+        .bind(new.label.trim())
+        .bind(new.weekday.map(i16::from))
+        .bind(new.on_date.as_deref())
+        .bind(i32::try_from(new.start).unwrap_or(0))
+        .bind(i32::try_from(new.end).unwrap_or(0))
+        .fetch_one(pool)
+        .await?;
+    Ok(row.into())
+}
+
+/// Changes a block's name and times.
+pub async fn update_block(
+    pool: &PgPool,
+    id: i64,
+    label: &str,
+    start: u32,
+    end: u32,
+) -> Result<Option<ScheduleBlock>, sqlx::Error> {
+    let sql = format!(
+        "UPDATE schedule_blocks SET label = $2, start_time = $3, end_time = $4 \
+         WHERE id = $1 RETURNING {BLOCK_COLUMNS}"
+    );
+    let row = sqlx::query_as::<_, BlockRow>(&sql)
+        .bind(id)
+        .bind(label)
+        .bind(i32::try_from(start).unwrap_or(0))
+        .bind(i32::try_from(end).unwrap_or(0))
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(ScheduleBlock::from))
+}
+
+/// Removes a block; `true` if one was removed.
+pub async fn delete_block(pool: &PgPool, id: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("DELETE FROM schedule_blocks WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
+}
+
+/// Adds a split time for a weekday (adding the same one twice is harmless).
+pub async fn insert_split(pool: &PgPool, weekday: u8, at: u32) -> Result<Split, sqlx::Error> {
+    let row = sqlx::query_as::<_, SplitRow>(
+        "INSERT INTO schedule_splits (weekday, at_time) VALUES ($1, $2) \
+         ON CONFLICT (weekday, at_time) DO UPDATE SET at_time = EXCLUDED.at_time \
+         RETURNING id, weekday, at_time",
+    )
+    .bind(i16::from(weekday))
+    .bind(i32::try_from(at).unwrap_or(0))
+    .fetch_one(pool)
+    .await?;
+    Ok(row.into())
+}
+
+/// Removes a split time; `true` if one was removed.
+pub async fn delete_split(pool: &PgPool, id: i64) -> Result<bool, sqlx::Error> {
+    let done = sqlx::query("DELETE FROM schedule_splits WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(done.rows_affected() > 0)
 }
