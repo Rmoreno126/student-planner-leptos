@@ -54,4 +54,4 @@ If the draft is ambiguous, port its observable behavior, add a test that pins yo
 choice, and list the choice in your summary.
 
 ## Final report format
-Files changed, each command and its result, and any assumptions made.
+Files changed, each command and its result, and any assumptions made.Also read CLAUDE.md at the repo root and follow it.

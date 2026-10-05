@@ -13,7 +13,7 @@ const MIN_HEIGHT: f32 = 56.0;
 /// Hour label: "11 AM", or "10:50 AM" when it isn't on the hour.
 pub fn mark_label(minutes: u32) -> String {
     let full = fmt_12h(minutes);
-    if minutes % 60 == 0 {
+    if minutes.is_multiple_of(60) {
         full.replacen(":00", "", 1)
             .trim_start_matches('0')
             .to_string()
