@@ -47,7 +47,7 @@ pub fn HistoryView() -> impl IntoView {
             <div class="header-row">
                 <h2>"History"</h2>
                 <button class="btn-primary" on:click=move |_| run(refresh, error, archive_all())>
-                    "🗄 Archive all"
+                    "📦 Archive all"
                 </button>
             </div>
             <p class="settings-subtitle">
@@ -110,7 +110,7 @@ fn HistoryBoard(
             can_reschedule=false
         />
         <HistorySection
-            title="🗄 Archive"
+            title="📦 Archive"
             hint="Everything you archived. Nothing is ever deleted automatically."
             tasks=archived
             search=search

@@ -4,10 +4,13 @@ pub mod api;
 pub mod checklist;
 #[cfg(feature = "ssr")]
 pub mod db;
+pub mod editor;
+pub mod editor_modal;
 pub mod history_view;
 pub mod model;
 pub mod notes;
 pub mod slices;
+pub mod snippets;
 
 pub mod app;
 

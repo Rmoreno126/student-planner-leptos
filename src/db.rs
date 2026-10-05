@@ -256,3 +256,24 @@ pub async fn reschedule_today(
         .await?;
     Ok(row.map(Task::from))
 }
+
+/// Reads a saved setting.
+pub async fn get_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Saves a setting, replacing any earlier value.
+pub async fn set_setting(pool: &PgPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO settings (key, value) VALUES ($1, $2) \
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await?;
+    Ok(())
+}

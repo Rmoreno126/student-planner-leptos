@@ -186,3 +186,15 @@ async fn reschedule_brings_an_archived_task_back_to_today(pool: PgPool) -> sqlx:
     assert_eq!(db::list_daily(&pool, &today).await?.len(), 1);
     Ok(())
 }
+
+#[sqlx::test]
+async fn settings_round_trip(pool: PgPool) -> sqlx::Result<()> {
+    assert_eq!(db::get_setting(&pool, "toolbar").await?, None);
+    db::set_setting(&pool, "toolbar", "task,list").await?;
+    db::set_setting(&pool, "toolbar", "task,bold").await?;
+    assert_eq!(
+        db::get_setting(&pool, "toolbar").await?.as_deref(),
+        Some("task,bold")
+    );
+    Ok(())
+}

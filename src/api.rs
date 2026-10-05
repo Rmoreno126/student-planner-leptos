@@ -129,3 +129,23 @@ pub async fn reschedule_today(id: i64) -> Result<Task, ServerFnError> {
         .map_err(fail)?;
     task.ok_or_else(missing)
 }
+
+/// The saved editor toolbar as comma-separated snippet ids.
+#[server]
+pub async fn get_toolbar() -> Result<String, ServerFnError> {
+    let saved = crate::db::get_setting(pool()?, "toolbar")
+        .await
+        .map_err(fail)?;
+    let ids = crate::snippets::parse(&saved.unwrap_or_default());
+    Ok(crate::snippets::join(&crate::snippets::sanitize(&ids)))
+}
+
+/// Saves the editor toolbar after cleaning it up; returns what was saved.
+#[server]
+pub async fn save_toolbar(ids: String) -> Result<String, ServerFnError> {
+    let clean = crate::snippets::join(&crate::snippets::sanitize(&crate::snippets::parse(&ids)));
+    crate::db::set_setting(pool()?, "toolbar", &clean)
+        .await
+        .map_err(fail)?;
+    Ok(clean)
+}

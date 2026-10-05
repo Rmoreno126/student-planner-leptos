@@ -610,3 +610,33 @@ textarea#editTaskDescription {
 .error { color: #fda4af; font-size: 0.9rem; margin-bottom: 0.75rem; }
 
 .note-check { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0; }
+
+/* ---- IDE-style notes editor (dark, VS Code feel) ---- */
+.ide-label { display: block; margin: 0.9rem 0 0.4rem; color: #94a3b8; font-size: 0.85rem; }
+.ide { border: 1px solid #1e3a5f; border-radius: 10px; background: #05070d; overflow: hidden; }
+.ide:focus-within { border-color: #4fc3f7; box-shadow: 0 0 0 1px rgba(79, 195, 247, 0.35); }
+.ide-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.5rem 0.6rem; border-bottom: 1px solid #14233a; background: #070b14; }
+.ide-btn { background: #0d1626; color: #cfe8ff; border: 1px solid #1e3a5f; border-radius: 6px; padding: 0.25rem 0.6rem; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
+.ide-btn:hover { border-color: #4fc3f7; color: #fff; }
+.ide-stack { position: relative; }
+.ide .ide-mirror, .ide .ide-input {
+    margin: 0; padding: 0.9rem 1rem; border: 0; border-radius: 0; box-shadow: none;
+    box-sizing: border-box; width: 100%; min-height: 12rem;
+    font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-size: 0.95rem; line-height: 1.6; letter-spacing: 0; tab-size: 4;
+    white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+}
+.ide .ide-mirror { position: relative; color: #e6edf3; background: transparent; pointer-events: none; }
+.ide .ide-input { position: absolute; inset: 0; height: 100%; background: transparent; color: transparent; caret-color: #4fc3f7; resize: none; overflow: hidden; outline: none; z-index: 2; }
+.ide .ide-input::placeholder { color: #4b5d78; }
+.ide .ide-input::selection { background: rgba(79, 195, 247, 0.35); color: transparent; }
+.cb { font-weight: 700; border-radius: 3px; box-shadow: 0 0 0 1px currentColor; }
+.cb-off { color: #f5a742; background: rgba(245, 167, 66, 0.12); }
+.cb-on { color: #3ddc97; background: rgba(61, 220, 151, 0.14); }
+.ide-done { color: #6b7a90; text-decoration: line-through; }
+.ide-settings { display: grid; gap: 0.6rem; padding: 0.7rem 0.8rem; border-bottom: 1px solid #14233a; background: #070b14; }
+.ide-settings-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.ide-chip { display: inline-flex; align-items: center; gap: 0.35rem; background: #0d1626; color: #cfe8ff; border: 1px solid #1e3a5f; border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.8rem; cursor: pointer; }
+.ide-chip.on { border-color: #4fc3f7; }
+.ide-chip button { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 0.1rem; }
+.task-actions { display: flex; align-items: center; gap: 0.4rem; }

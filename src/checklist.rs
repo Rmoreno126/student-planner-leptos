@@ -30,7 +30,7 @@ pub fn toggle_checkbox(notes: &str, index: usize) -> Option<String> {
     Some(toggled)
 }
 
-fn checkbox_matches(notes: &str) -> Vec<(usize, usize, bool)> {
+pub fn checkbox_matches(notes: &str) -> Vec<(usize, usize, bool)> {
     let mut matches = Vec::new();
     let mut search_from = 0;
 
