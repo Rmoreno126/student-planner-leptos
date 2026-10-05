@@ -18,6 +18,7 @@ wasm-bindgen = { version = "0.2.106", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate"], optional = true }
 dotenvy = { version = "0.15.7", optional = true }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 
 [features]
 hydrate = [

@@ -135,8 +135,13 @@ use std::future::Future;
 
 use leptos_router::hooks::use_query_map;
 
-use crate::api::{add_task, delete_task, list_daily, today_name, toggle_complete, toggle_rollover};
-use crate::model::{NewTask, Priority, Task};
+use crate::api::{
+    add_task, delete_task, list_daily, move_task, today_name, toggle_complete, toggle_rollover,
+    update_task,
+};
+use crate::checklist::{checklist_progress, toggle_checkbox};
+use crate::model::{NewTask, Priority, Task, TaskUpdate};
+use crate::notes::{render_markdown, split_notes, NoteBlock};
 use crate::slices::{blocked_at, fmt_12h, open_slice_id_at, parse_hhmm};
 
 /// Weekday labels, Monday first.
@@ -164,6 +169,22 @@ fn tab_class(active: bool) -> &'static str {
     } else {
         "tab-btn"
     }
+}
+
+/// Minutes since midnight as `HH:MM`, the format a time input expects.
+fn hhmm(minutes: u32) -> String {
+    format!("{:02}:{:02}", (minutes / 60) % 24, minutes % 60)
+}
+
+/// Adds a markdown snippet to the end of the notes. Line-style snippets start a new line.
+fn append_snippet(notes: RwSignal<String>, snippet: &'static str) {
+    let line_style = ["[ ] ", "- ", "1. ", "### "].contains(&snippet);
+    notes.update(|text| {
+        if line_style && !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(snippet);
+    });
 }
 
 /// HTML shell wrapped around the app on the server.
@@ -261,16 +282,18 @@ fn DailyView() -> impl IntoView {
     }
 }
 
-/// Header, add-task form, and the slice board for one weekday.
+/// Header, add-task form, slice board, and edit dialog for one weekday.
 #[component]
 fn DayPlan(name: String) -> impl IntoView {
     let schedule = default_weekly_schedule();
     let slices = schedule.slices_for(&name);
     let wake = schedule.wake_time;
     let form_slices = slices.clone();
+    let modal_slices = slices.clone();
 
     let refresh = RwSignal::new(0u32);
     let error = RwSignal::new(None::<String>);
+    let editing = RwSignal::new(None::<Task>);
     let tasks = Resource::new(move || refresh.get(), |_| list_daily());
 
     view! {
@@ -286,7 +309,13 @@ fn DayPlan(name: String) -> impl IntoView {
                 Suspend::new(async move {
                     match tasks.await {
                         Ok(list) => view! {
-                            <SliceBoard slices=slices tasks=list refresh=refresh error=error/>
+                            <SliceBoard
+                                slices=slices
+                                tasks=list
+                                refresh=refresh
+                                error=error
+                                editing=editing
+                            />
                         }
                         .into_any(),
                         Err(e) => view! { <p class="error">{e.to_string()}</p> }.into_any(),
@@ -294,6 +323,20 @@ fn DayPlan(name: String) -> impl IntoView {
                 })
             }}
         </Suspense>
+        {move || {
+            editing.get().map(|task| {
+                view! {
+                    <EditModal
+                        task=task
+                        slices=modal_slices.clone()
+                        wake=wake
+                        editing=editing
+                        refresh=refresh
+                        error=error
+                    />
+                }
+            })
+        }}
     }
 }
 
@@ -405,6 +448,7 @@ fn SliceBoard(
     tasks: Vec<Task>,
     refresh: RwSignal<u32>,
     error: RwSignal<Option<String>>,
+    editing: RwSignal<Option<Task>>,
 ) -> impl IntoView {
     let (mut done, mut active): (Vec<Task>, Vec<Task>) =
         tasks.into_iter().partition(|t| t.completed);
@@ -448,7 +492,7 @@ fn SliceBoard(
                         <div class="slice-header">
                             <span class="slice-title">{slice.label.clone()}</span>
                         </div>
-                        <TaskList tasks=mine refresh=refresh error=error/>
+                        <TaskList tasks=mine refresh=refresh error=error editing=editing/>
                     </div>
                 }
                 .into_any()
@@ -467,7 +511,7 @@ fn SliceBoard(
                 <div class="slice-header">
                     <span class="slice-title">"📌 Unassigned Tasks"</span>
                 </div>
-                <TaskList tasks=loose refresh=refresh error=error/>
+                <TaskList tasks=loose refresh=refresh error=error editing=editing/>
             </div>
         }
     });
@@ -476,7 +520,7 @@ fn SliceBoard(
         view! {
             <div class="completed-card">
                 <h3 class="completed-header">"✓ Completed Tasks"</h3>
-                <TaskList tasks=done refresh=refresh error=error/>
+                <TaskList tasks=done refresh=refresh error=error editing=editing/>
             </div>
         }
     });
@@ -493,20 +537,29 @@ fn TaskList(
     tasks: Vec<Task>,
     refresh: RwSignal<u32>,
     error: RwSignal<Option<String>>,
+    editing: RwSignal<Option<Task>>,
 ) -> impl IntoView {
     view! {
         <ul class="task-list">
             {tasks
                 .into_iter()
-                .map(|task| view! { <TaskRow task=task refresh=refresh error=error/> })
+                .map(|task| {
+                    view! { <TaskRow task=task refresh=refresh error=error editing=editing/> }
+                })
                 .collect::<Vec<_>>()}
         </ul>
     }
 }
 
-/// One task: checkbox, title, time, priority, rollover and delete buttons.
+/// One task: checkbox, title, badges, action buttons, and its notes.
 #[component]
-fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) -> impl IntoView {
+fn TaskRow(
+    task: Task,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+    editing: RwSignal<Option<Task>>,
+) -> impl IntoView {
+    let for_edit = task.clone();
     let id = task.id;
     let completed = task.completed;
     let item_class = format!(
@@ -522,6 +575,17 @@ fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) 
     let badge_class = format!("priority-badge prio-{}", task.priority.code());
     let label = task.priority.label();
     let time_badge = task.start_time.map(|t| format!("🕒 {}", fmt_12h(t)));
+    let progress_badge = checklist_progress(&task.notes).map(|(done, total)| {
+        let class = if done == total {
+            "subtask-badge all-done"
+        } else {
+            "subtask-badge"
+        };
+        view! { <span class=class>{format!("{done}/{total}")}</span> }
+    });
+    let notes_view = (!task.notes.trim().is_empty()).then(|| {
+        view! { <NotesView id=id notes=task.notes.clone() refresh=refresh error=error/> }
+    });
     let title = task.title;
 
     view! {
@@ -535,6 +599,7 @@ fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) 
                 />
                 <span class="task-title">{title}</span>
                 {time_badge.map(|text| view! { <span class="task-time-badge">{text}</span> })}
+                {progress_badge}
                 <span class=badge_class>{label}</span>
                 <div class="task-actions">
                     <button
@@ -545,6 +610,13 @@ fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) 
                         "➔"
                     </button>
                     <button
+                        class="icon-btn edit-btn"
+                        title="Edit"
+                        on:click=move |_| editing.set(Some(for_edit.clone()))
+                    >
+                        "✎"
+                    </button>
+                    <button
                         class="icon-btn delete-btn"
                         title="Delete"
                         on:click=move |_| run(refresh, error, delete_task(id))
@@ -553,7 +625,229 @@ fn TaskRow(task: Task, refresh: RwSignal<u32>, error: RwSignal<Option<String>>) 
                     </button>
                 </div>
             </div>
+            {notes_view}
         </li>
+    }
+}
+
+/// A task's notes: markdown text, with checklist lines as tickable boxes.
+#[component]
+fn NotesView(
+    id: i64,
+    notes: String,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let rows = split_notes(&notes)
+        .into_iter()
+        .map(|block| match block {
+            NoteBlock::Text(text) => {
+                view! { <div inner_html=render_markdown(&text)></div> }.into_any()
+            }
+            NoteBlock::Check {
+                index,
+                checked,
+                label,
+            } => {
+                let source = notes.clone();
+                view! {
+                    <label class="note-check">
+                        <input
+                            type="checkbox"
+                            checked=checked
+                            on:change=move |_| {
+                                if let Some(updated) = toggle_checkbox(&source, index) {
+                                    let changes = TaskUpdate {
+                                        notes: Some(updated),
+                                        ..TaskUpdate::default()
+                                    };
+                                    run(refresh, error, update_task(id, changes));
+                                }
+                            }
+                        />
+                        <span>{label}</span>
+                    </label>
+                }
+                .into_any()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    view! { <div class="task-notes-rendered">{rows}</div> }
+}
+
+/// The edit dialog: title, slice, start time, and markdown notes.
+#[component]
+fn EditModal(
+    task: Task,
+    slices: Vec<Slice>,
+    wake: u32,
+    editing: RwSignal<Option<Task>>,
+    refresh: RwSignal<u32>,
+    error: RwSignal<Option<String>>,
+) -> impl IntoView {
+    let id = task.id;
+    let open_ids: Vec<String> = slices
+        .iter()
+        .filter(|s| s.kind == SliceKind::Open)
+        .map(|s| s.id.clone())
+        .collect();
+    let title = RwSignal::new(task.title);
+    let notes = RwSignal::new(task.notes);
+    let time = RwSignal::new(task.start_time.map(hhmm).unwrap_or_default());
+    let slice_sel = RwSignal::new(
+        task.slice_id
+            .filter(|s| open_ids.contains(s))
+            .unwrap_or_default(),
+    );
+
+    let slices_for_time = slices.clone();
+    let slices_for_save = slices.clone();
+    let slice_options = slices
+        .iter()
+        .filter(|s| s.kind == SliceKind::Open)
+        .map(|s| {
+            let value = s.id.clone();
+            let current = s.id.clone();
+            let label = s.label.clone();
+            view! {
+                <option value=value prop:selected=move || slice_sel.get() == current>
+                    {label}
+                </option>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let close = move |_| editing.set(None);
+
+    let save = move |_| {
+        let new_title = title.get_untracked();
+        if new_title.trim().is_empty() {
+            error.set(Some("Task title cannot be empty".to_string()));
+            return;
+        }
+        let minutes = parse_hhmm(&time.get_untracked());
+        if let Some(t) = minutes {
+            if let Some(block) = blocked_at(&slices_for_save, t, wake) {
+                error.set(Some(format!(
+                    "That time falls in a blocked window: {}",
+                    block.label
+                )));
+                return;
+            }
+        }
+        let chosen = slice_sel.get_untracked();
+        let slice_id = if chosen.is_empty() {
+            None
+        } else {
+            Some(chosen)
+        };
+        let changes = TaskUpdate {
+            title: Some(new_title),
+            notes: Some(notes.get_untracked()),
+            priority: None,
+        };
+        leptos::task::spawn_local(async move {
+            let saved: Result<Task, ServerFnError> = async {
+                update_task(id, changes).await?;
+                move_task(id, slice_id, minutes).await
+            }
+            .await;
+            match saved {
+                Ok(_) => {
+                    error.set(None);
+                    refresh.update(|n| *n += 1);
+                    editing.set(None);
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+        });
+    };
+
+    view! {
+        <div class="modal-overlay">
+            <div class="modal-content edit-modal-large">
+                <div class="modal-header">
+                    <h3>"Edit Task"</h3>
+                    <button type="button" class="icon-btn" on:click=close>"✖"</button>
+                </div>
+                <div class="modal-body">
+                    {move || error.get().map(|message| view! { <p class="error">{message}</p> })}
+                    <div class="edit-field-group">
+                        <label>"Task Title"</label>
+                        <input
+                            type="text"
+                            class="input-field"
+                            prop:value=move || title.get()
+                            on:input=move |ev| title.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <div class="edit-row">
+                        <div class="edit-field-group flex-1">
+                            <label>"Assigned Time Slice"</label>
+                            <select
+                                class="input-field"
+                                on:change=move |ev| slice_sel.set(event_target_value(&ev))
+                            >
+                                <option value="" prop:selected=move || slice_sel.get().is_empty()>
+                                    "Unassigned"
+                                </option>
+                                {slice_options}
+                            </select>
+                        </div>
+                        <div class="edit-field-group flex-1">
+                            <label>"Start Time"</label>
+                            <input
+                                type="time"
+                                class="input-field"
+                                prop:value=move || time.get()
+                                on:input=move |ev| {
+                                    let value = event_target_value(&ev);
+                                    if let Some(found) = parse_hhmm(&value)
+                                        .and_then(|t| open_slice_id_at(&slices_for_time, t, wake))
+                                    {
+                                        slice_sel.set(found.to_string());
+                                    }
+                                    time.set(value);
+                                }
+                            />
+                        </div>
+                    </div>
+                    <div class="edit-field-group">
+                        <label>"Additional Notes (Markdown Supported)"</label>
+                        <div class="md-toolbar">
+                            <button type="button" on:click=move |_| append_snippet(notes, "[ ] ")>
+                                "☑ Task"
+                            </button>
+                            <button type="button" on:click=move |_| append_snippet(notes, "- ")>
+                                "• List"
+                            </button>
+                            <button type="button" on:click=move |_| append_snippet(notes, "1. ")>
+                                "1. Number"
+                            </button>
+                            <button type="button" on:click=move |_| append_snippet(notes, "### ")>
+                                "H3"
+                            </button>
+                            <button
+                                type="button"
+                                on:click=move |_| append_snippet(notes, "**bold**")
+                            >
+                                "Bold"
+                            </button>
+                        </div>
+                        <textarea
+                            placeholder="Add subtasks or notes here using Markdown..."
+                            prop:value=move || notes.get()
+                            on:input=move |ev| notes.set(event_target_value(&ev))
+                        ></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" on:click=close>"Cancel"</button>
+                    <button type="button" class="btn-primary" on:click=save>"Save Changes"</button>
+                </div>
+            </div>
+        </div>
     }
 }
 

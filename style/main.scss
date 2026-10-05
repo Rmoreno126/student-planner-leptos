@@ -608,3 +608,5 @@ textarea#editTaskDescription {
 .divider { border: 0; height: 1px; background: var(--card-border); margin: 1rem 0; }
 .hidden { display: none !important; }
 .error { color: #fda4af; font-size: 0.9rem; margin-bottom: 0.75rem; }
+
+.note-check { display: flex; align-items: center; gap: 0.5rem; padding: 0.15rem 0; }

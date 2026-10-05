@@ -5,6 +5,7 @@ pub mod checklist;
 #[cfg(feature = "ssr")]
 pub mod db;
 pub mod model;
+pub mod notes;
 pub mod slices;
 
 pub mod app;
