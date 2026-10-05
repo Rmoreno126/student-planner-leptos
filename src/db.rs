@@ -78,7 +78,7 @@ pub async fn today(pool: &PgPool) -> Result<String, sqlx::Error> {
 
 /// Tasks due today or earlier (overdue tasks roll into today, like the original app).
 pub async fn list_daily(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx::Error> {
-    let sql = format!("SELECT {COLUMNS} FROM tasks WHERE due_date <= $1::date ORDER BY id");
+    let sql = format!("SELECT {COLUMNS} FROM tasks WHERE NOT archived AND (due_date = $1::date OR (due_date < $1::date AND rollover AND NOT completed)) ORDER BY id");
     let rows = sqlx::query_as::<_, TaskRow>(&sql)
         .bind(today)
         .fetch_all(pool)
@@ -90,7 +90,7 @@ pub async fn list_daily(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx::E
 pub async fn list_planned(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx::Error> {
     let sql = format!(
         "SELECT {COLUMNS} FROM tasks \
-         WHERE due_date > $1::date AND due_date <= $1::date + 7 ORDER BY due_date, id"
+         WHERE NOT archived AND due_date > $1::date AND due_date <= $1::date + 7 ORDER BY due_date, id"
     );
     let rows = sqlx::query_as::<_, TaskRow>(&sql)
         .bind(today)
@@ -190,4 +190,69 @@ pub async fn weekday(pool: &PgPool) -> Result<String, sqlx::Error> {
         .bind(APP_TZ)
         .fetch_one(pool)
         .await
+}
+
+async fn fetch_dated(pool: &PgPool, sql: &str, today: &str) -> Result<Vec<Task>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, TaskRow>(sql)
+        .bind(today)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().map(Task::from).collect())
+}
+
+/// Planned for a past day, never finished, and not set to roll over.
+pub async fn list_missed(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM tasks WHERE NOT archived AND NOT completed AND NOT rollover \
+         AND due_date < $1::date ORDER BY due_date DESC, id"
+    );
+    fetch_dated(pool, &sql, today).await
+}
+
+/// Finished tasks from a past day that are not archived yet.
+pub async fn list_done(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM tasks WHERE NOT archived AND completed \
+         AND due_date < $1::date ORDER BY due_date DESC, id"
+    );
+    fetch_dated(pool, &sql, today).await
+}
+
+/// Everything the user archived, newest first.
+pub async fn list_archived(pool: &PgPool) -> Result<Vec<Task>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {COLUMNS} FROM tasks WHERE archived ORDER BY due_date DESC, id DESC LIMIT 500"
+    );
+    let rows = sqlx::query_as::<_, TaskRow>(&sql).fetch_all(pool).await?;
+    Ok(rows.into_iter().map(Task::from).collect())
+}
+
+/// Archives every finished or missed task from before `today`. Returns how many moved.
+pub async fn archive_past(pool: &PgPool, today: &str) -> Result<u64, sqlx::Error> {
+    let done = sqlx::query(
+        "UPDATE tasks SET archived = TRUE WHERE NOT archived AND due_date < $1::date \
+         AND (completed OR NOT rollover)",
+    )
+    .bind(today)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
+/// Brings a task back to `today`: un-archived, not done, and without a slice yet.
+pub async fn reschedule_today(
+    pool: &PgPool,
+    id: i64,
+    today: &str,
+) -> Result<Option<Task>, sqlx::Error> {
+    let sql = format!(
+        "UPDATE tasks SET due_date = $2::date, archived = FALSE, completed = FALSE, \
+         slice_id = NULL, start_time = NULL WHERE id = $1 RETURNING {COLUMNS}"
+    );
+    let row = sqlx::query_as::<_, TaskRow>(&sql)
+        .bind(id)
+        .bind(today)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(Task::from))
 }

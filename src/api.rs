@@ -1,6 +1,6 @@
 //! Server functions: the browser calls these, the server runs them.
 
-use crate::model::{NewTask, Task, TaskUpdate};
+use crate::model::{History, NewTask, Task, TaskUpdate};
 use leptos::prelude::*;
 
 #[cfg(feature = "ssr")]
@@ -97,4 +97,35 @@ pub async fn delete_task(id: i64) -> Result<(), ServerFnError> {
 #[server]
 pub async fn today_name() -> Result<String, ServerFnError> {
     crate::db::weekday(pool()?).await.map_err(fail)
+}
+
+/// Missed, finished, and archived tasks for the History tab.
+#[server]
+pub async fn list_history() -> Result<History, ServerFnError> {
+    let pool = pool()?;
+    let today = crate::db::today(pool).await.map_err(fail)?;
+    Ok(History {
+        missed: crate::db::list_missed(pool, &today).await.map_err(fail)?,
+        done: crate::db::list_done(pool, &today).await.map_err(fail)?,
+        archived: crate::db::list_archived(pool).await.map_err(fail)?,
+    })
+}
+
+/// Archives every missed or finished task from before today. Returns how many moved.
+#[server]
+pub async fn archive_all() -> Result<u64, ServerFnError> {
+    let pool = pool()?;
+    let today = crate::db::today(pool).await.map_err(fail)?;
+    crate::db::archive_past(pool, &today).await.map_err(fail)
+}
+
+/// Puts a task back on today's plan.
+#[server]
+pub async fn reschedule_today(id: i64) -> Result<Task, ServerFnError> {
+    let pool = pool()?;
+    let today = crate::db::today(pool).await.map_err(fail)?;
+    let task = crate::db::reschedule_today(pool, id, &today)
+        .await
+        .map_err(fail)?;
+    task.ok_or_else(missing)
 }

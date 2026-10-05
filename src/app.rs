@@ -140,6 +140,7 @@ use crate::api::{
     update_task,
 };
 use crate::checklist::{checklist_progress, toggle_checkbox};
+use crate::history_view::HistoryView;
 use crate::model::{NewTask, Priority, Task, TaskUpdate};
 use crate::notes::{render_markdown, split_notes, NoteBlock};
 use crate::slices::{blocked_at, fmt_12h, open_slice_id_at, parse_hhmm};
@@ -160,6 +161,7 @@ const WEEKDAYS: [&str; 7] = [
 enum Tab {
     Daily,
     Weekly,
+    History,
 }
 
 /// CSS class for a tab button.
@@ -244,10 +246,18 @@ fn HomePage() -> impl IntoView {
                     <span class="tab-icon blue-icon">"⚙️"</span>
                     " Weekly Schedule"
                 </button>
+                <button
+                    class=move || tab_class(tab.get() == Tab::History)
+                    on:click=move |_| tab.set(Tab::History)
+                >
+                    <span class="tab-icon">"🗄"</span>
+                    " History"
+                </button>
             </nav>
             {move || match tab.get() {
                 Tab::Daily => view! { <DailyView/> }.into_any(),
                 Tab::Weekly => view! { <WeeklyView/> }.into_any(),
+                Tab::History => view! { <HistoryView/> }.into_any(),
             }}
         </div>
     }

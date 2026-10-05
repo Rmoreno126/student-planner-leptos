@@ -118,6 +118,17 @@ pub fn is_iso_date(s: &str) -> bool {
         })
 }
 
+/// Everything the History tab shows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct History {
+    /// Planned for a past day, never finished, and not set to roll over.
+    pub missed: Vec<Task>,
+    /// Finished tasks from past days.
+    pub done: Vec<Task>,
+    /// Everything the user archived.
+    pub archived: Vec<Task>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

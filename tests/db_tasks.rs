@@ -37,7 +37,7 @@ async fn insert_then_list_daily(pool: PgPool) -> sqlx::Result<()> {
 }
 
 #[sqlx::test]
-async fn overdue_is_daily_and_next_week_is_planned(pool: PgPool) -> sqlx::Result<()> {
+async fn overdue_is_missed_not_daily_and_next_week_is_planned(pool: PgPool) -> sqlx::Result<()> {
     let today = db::today(&pool).await?;
     let in_three: String = sqlx::query_scalar("SELECT ($1::date + 3)::text")
         .bind(&today)
@@ -52,8 +52,8 @@ async fn overdue_is_daily_and_next_week_is_planned(pool: PgPool) -> sqlx::Result
 
     let daily = db::list_daily(&pool, &today).await?;
     let planned = db::list_planned(&pool, &today).await?;
-    assert_eq!(daily.len(), 1);
-    assert_eq!(daily[0].title, "overdue");
+    assert!(daily.is_empty());
+    assert_eq!(db::list_missed(&pool, &today).await?.len(), 1);
     assert_eq!(planned.len(), 1);
     assert_eq!(planned[0].title, "soon");
     Ok(())
@@ -125,5 +125,64 @@ async fn weekday_is_a_day_name(pool: PgPool) -> sqlx::Result<()> {
         "Sunday",
     ];
     assert!(days.contains(&day.as_str()));
+    Ok(())
+}
+
+#[sqlx::test]
+async fn rollover_tasks_stay_on_the_daily_plan_until_done(pool: PgPool) -> sqlx::Result<()> {
+    let today = db::today(&pool).await?;
+    let mut new = new_task("carry me");
+    new.due_date = Some("2000-01-01".into());
+    let task = db::insert(&pool, &new, &today).await?;
+    assert!(db::list_daily(&pool, &today).await?.is_empty());
+    db::toggle_rollover(&pool, task.id).await?;
+    assert_eq!(db::list_daily(&pool, &today).await?.len(), 1);
+    db::toggle_complete(&pool, task.id).await?;
+    assert!(db::list_daily(&pool, &today).await?.is_empty());
+    assert_eq!(db::list_done(&pool, &today).await?.len(), 1);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn archive_all_moves_missed_and_done_but_deletes_nothing(pool: PgPool) -> sqlx::Result<()> {
+    let today = db::today(&pool).await?;
+    let mut old = new_task("missed one");
+    old.due_date = Some("2000-01-01".into());
+    db::insert(&pool, &old, &today).await?;
+    let mut finished = new_task("finished one");
+    finished.due_date = Some("2000-01-02".into());
+    let finished = db::insert(&pool, &finished, &today).await?;
+    db::toggle_complete(&pool, finished.id).await?;
+    db::insert(&pool, &new_task("today's task"), &today).await?;
+
+    assert_eq!(db::list_missed(&pool, &today).await?.len(), 1);
+    assert_eq!(db::list_done(&pool, &today).await?.len(), 1);
+    assert_eq!(db::archive_past(&pool, &today).await?, 2);
+    assert!(db::list_missed(&pool, &today).await?.is_empty());
+    assert!(db::list_done(&pool, &today).await?.is_empty());
+    assert_eq!(db::list_archived(&pool).await?.len(), 2);
+    assert_eq!(db::list_daily(&pool, &today).await?.len(), 1);
+    Ok(())
+}
+
+#[sqlx::test]
+async fn reschedule_brings_an_archived_task_back_to_today(pool: PgPool) -> sqlx::Result<()> {
+    let today = db::today(&pool).await?;
+    let mut old = new_task("second chance");
+    old.due_date = Some("2000-01-01".into());
+    old.slice_id = Some("slice_1".into());
+    old.start_time = Some(600);
+    let old = db::insert(&pool, &old, &today).await?;
+    db::archive_past(&pool, &today).await?;
+    assert_eq!(db::list_archived(&pool).await?.len(), 1);
+
+    let back = db::reschedule_today(&pool, old.id, &today)
+        .await?
+        .expect("task exists");
+    assert_eq!(back.due_date, today);
+    assert_eq!(back.slice_id, None);
+    assert_eq!(back.start_time, None);
+    assert!(db::list_archived(&pool).await?.is_empty());
+    assert_eq!(db::list_daily(&pool, &today).await?.len(), 1);
     Ok(())
 }
