@@ -14,3 +14,4 @@ draft/
 .env
 rustc-ice-*.txt
 /target
+verify.log

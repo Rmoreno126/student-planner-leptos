@@ -640,3 +640,13 @@ textarea#editTaskDescription {
 .ide-chip.on { border-color: #4fc3f7; }
 .ide-chip button { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 0.1rem; }
 .task-actions { display: flex; align-items: center; gap: 0.4rem; }
+
+/* ---- editor alignment fix: the draft's `* { font-family }` rule hit the highlight spans ---- */
+.ide .ide-mirror, .ide .ide-mirror * {
+    font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-size: 0.95rem; line-height: 1.6; font-weight: 400; font-style: normal;
+    letter-spacing: 0; font-kerning: none; font-variant-ligatures: none; font-synthesis: none;
+}
+.ide .ide-input { font-kerning: none; font-variant-ligatures: none; font-synthesis: none; z-index: 1; }
+.ide .ide-mirror { z-index: 3; }
+.ide .ide-mirror .cb { pointer-events: auto; cursor: pointer; }

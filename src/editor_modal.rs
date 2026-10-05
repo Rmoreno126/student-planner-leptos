@@ -7,10 +7,9 @@
 use leptos::prelude::*;
 
 use crate::api::{add_task, get_toolbar, move_task, save_toolbar, update_task};
-use crate::checklist::{checkbox_matches, toggle_checkbox};
 use crate::editor::{
-    byte_to_utf16, insert_snippet, marker_at_caret, normalize_marker, segments, tab, utf16_to_byte,
-    Edit, Segment,
+    byte_to_utf16, insert_snippet, normalize_marker, segments, tab, toggle_at, utf16_to_byte, Edit,
+    Segment,
 };
 use crate::model::{NewTask, Priority, Task, TaskUpdate};
 use crate::slices::{blocked_at, open_slice_id_at, parse_hhmm, Slice, SliceKind};
@@ -62,6 +61,15 @@ fn apply(input: NodeRef<leptos::html::Textarea>, value: RwSignal<String>, edit: 
     value.set(edit.text);
 }
 
+/// Ticks or unticks the `index`th checkbox and keeps the caret where it was.
+fn toggle_marker(input: NodeRef<leptos::html::Textarea>, value: RwSignal<String>, index: usize) {
+    let text = value.get_untracked();
+    let (caret, _) = caret_pair(input, &text);
+    if let Some(edit) = toggle_at(&text, index, caret) {
+        apply(input, value, edit);
+    }
+}
+
 /// A VS Code-style notes editor: real typing, live checkbox markers, snippet buttons.
 #[component]
 fn IdeEditor(value: RwSignal<String>, toolbar: RwSignal<Vec<String>>) -> impl IntoView {
@@ -96,9 +104,9 @@ fn IdeEditor(value: RwSignal<String>, toolbar: RwSignal<Vec<String>>) -> impl In
             .map(|seg| match seg {
                 Segment::Plain(t) => view! { <span>{t}</span> }.into_any(),
                 Segment::Done(t) => view! { <span class="ide-done">{t}</span> }.into_any(),
-                Segment::Marker { checked, text, .. } => {
+                Segment::Marker { index, checked, text } => {
                     let class = if checked { "cb cb-on" } else { "cb cb-off" };
-                    view! { <span class=class>{text}</span> }.into_any()
+                    view! { <span class=class on:mousedown=move |ev| ev.prevent_default() on:click=move |_| toggle_marker(input, value, index)>{text}</span> }.into_any()
                 }
             })
             .collect();
@@ -154,21 +162,6 @@ fn IdeEditor(value: RwSignal<String>, toolbar: RwSignal<Vec<String>>) -> impl In
                                 }
                             }
                             _ => {}
-                        }
-                    }
-                    on:click=move |_| {
-                        let text = value.get_untracked();
-                        let (start, end) = caret_pair(input, &text);
-                        if start != end {
-                            return;
-                        }
-                        if let Some(index) = marker_at_caret(&text, start) {
-                            if let Some(toggled) = toggle_checkbox(&text, index) {
-                                let caret = checkbox_matches(&toggled)
-                                    .get(index)
-                                    .map_or(toggled.len(), |m| m.1);
-                                apply(input, value, Edit { text: toggled, caret });
-                            }
                         }
                     }
                 ></textarea>

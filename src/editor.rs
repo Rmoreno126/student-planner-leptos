@@ -3,7 +3,7 @@
 //! All offsets here are byte offsets; `utf16_to_byte` and `byte_to_utf16` convert to
 //! and from the positions the browser reports.
 
-use crate::checklist::checkbox_matches;
+use crate::checklist::{checkbox_matches, toggle_checkbox};
 
 /// What Tab inserts.
 pub const TAB: &str = "    ";
@@ -136,10 +136,26 @@ pub fn normalize_marker(text: &str, caret: usize) -> Option<Edit> {
     Some(insert_at(text, caret - 3, caret, "[ ] "))
 }
 
+/// Ticks or unticks the `index`th checkbox. The caret keeps its place in the text,
+/// even when the marker changes length (`[]` becomes `[x]`).
+pub fn toggle_at(text: &str, index: usize, caret: usize) -> Option<Edit> {
+    let toggled = toggle_checkbox(text, index)?;
+    let (_, end, _) = *checkbox_matches(text).get(index)?;
+    let caret = caret.min(text.len());
+    let caret = if caret >= end {
+        (caret + toggled.len()).saturating_sub(text.len())
+    } else {
+        caret
+    };
+    Some(Edit {
+        text: toggled,
+        caret,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checklist::toggle_checkbox;
 
     #[test]
     fn segments_split_markers_and_dim_done_rows() {
@@ -241,5 +257,37 @@ mod tests {
         );
         assert_eq!(normalize_marker("[]", 2), None);
         assert_eq!(normalize_marker("a [] b", 6), None);
+    }
+
+    #[test]
+    fn toggling_keeps_the_caret_in_place_even_when_the_marker_grows() {
+        // "[]" (2 chars) becomes "[x]" (3 chars): a caret after it shifts by one.
+        let edit = toggle_at("a [] b", 0, 6).expect("marker 0 exists");
+        assert_eq!(
+            edit,
+            Edit {
+                text: "a [x] b".into(),
+                caret: 7
+            }
+        );
+        // A caret before the marker does not move.
+        let edit = toggle_at("a [] b", 0, 1).expect("marker 0 exists");
+        assert_eq!(
+            edit,
+            Edit {
+                text: "a [x] b".into(),
+                caret: 1
+            }
+        );
+        // Same-length toggles leave the caret alone, and unticking works too.
+        let edit = toggle_at("[x] done", 0, 8).expect("marker 0 exists");
+        assert_eq!(
+            edit,
+            Edit {
+                text: "[ ] done".into(),
+                caret: 8
+            }
+        );
+        assert_eq!(toggle_at("no boxes", 0, 0), None);
     }
 }
