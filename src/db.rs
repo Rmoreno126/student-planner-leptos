@@ -7,9 +7,11 @@ use std::sync::OnceLock;
 
 /// Time zone that decides what "today" means.
 pub const APP_TZ: &str = "America/Los_Angeles";
+/// The day flips at 4 AM, so late-night work still counts as the day before.
+pub const DAY_CUTOFF: &str = "4 hours";
 
 const COLUMNS: &str = "id, title, notes, priority, completed, rollover, \
-                       due_date::text AS due_date, slice_id, start_time";
+                       due_date::text AS due_date, slice_id, start_time, duration_minutes";
 
 static POOL: OnceLock<PgPool> = OnceLock::new();
 
@@ -42,6 +44,7 @@ struct TaskRow {
     due_date: String,
     slice_id: Option<String>,
     start_time: Option<i32>,
+    duration_minutes: i32,
 }
 
 impl From<TaskRow> for Task {
@@ -56,6 +59,8 @@ impl From<TaskRow> for Task {
             due_date: r.due_date,
             slice_id: r.slice_id,
             start_time: r.start_time.and_then(|t| u32::try_from(t).ok()),
+            duration_minutes: u32::try_from(r.duration_minutes)
+                .unwrap_or(crate::model::DEFAULT_DURATION),
         }
     }
 }
@@ -70,10 +75,13 @@ async fn one(pool: &PgPool, sql: &str, id: i64) -> Result<Option<Task>, sqlx::Er
 
 /// Today's date (`YYYY-MM-DD`) in [`APP_TZ`].
 pub async fn today(pool: &PgPool) -> Result<String, sqlx::Error> {
-    sqlx::query_scalar::<_, String>("SELECT (now() AT TIME ZONE $1::text)::date::text")
-        .bind(APP_TZ)
-        .fetch_one(pool)
-        .await
+    sqlx::query_scalar::<_, String>(
+        "SELECT ((now() AT TIME ZONE $1::text) - $2::interval)::date::text",
+    )
+    .bind(APP_TZ)
+    .bind(DAY_CUTOFF)
+    .fetch_one(pool)
+    .await
 }
 
 /// Tasks due today or earlier (overdue tasks roll into today, like the original app).
@@ -103,9 +111,8 @@ pub async fn list_planned(pool: &PgPool, today: &str) -> Result<Vec<Task>, sqlx:
 pub async fn insert(pool: &PgPool, new: &NewTask, today: &str) -> Result<Task, sqlx::Error> {
     let due = new.due_date.as_deref().unwrap_or(today);
     let sql = format!(
-        "INSERT INTO tasks (title, notes, priority, due_date, slice_id, start_time) \
-         VALUES ($1, $2, $3, $4::date, $5, $6) RETURNING {COLUMNS}"
-    );
+           "INSERT INTO tasks (title, notes, priority, due_date, slice_id, start_time, duration_minutes) \
+            VALUES ($1, $2, $3, $4::date, $5, $6, $7) RETURNING {COLUMNS}"    );
     let row = sqlx::query_as::<_, TaskRow>(&sql)
         .bind(new.title.trim())
         .bind(&new.notes)
@@ -113,6 +120,7 @@ pub async fn insert(pool: &PgPool, new: &NewTask, today: &str) -> Result<Task, s
         .bind(due)
         .bind(new.slice_id.as_deref())
         .bind(new.start_time.and_then(|t| i32::try_from(t).ok()))
+        .bind(i32::try_from(new.duration_minutes).unwrap_or(15))
         .fetch_one(pool)
         .await?;
     Ok(row.into())
@@ -131,13 +139,15 @@ pub async fn update(
         .filter(|t| !t.is_empty());
     let sql = format!(
         "UPDATE tasks SET title = COALESCE($2, title), notes = COALESCE($3, notes), \
-         priority = COALESCE($4, priority) WHERE id = $1 RETURNING {COLUMNS}"
+            priority = COALESCE($4, priority), duration_minutes = COALESCE($5, duration_minutes) \
+            WHERE id = $1 RETURNING {COLUMNS}"
     );
     let row = sqlx::query_as::<_, TaskRow>(&sql)
         .bind(id)
         .bind(title)
         .bind(changes.notes.as_deref())
         .bind(changes.priority.map(Priority::code))
+        .bind(changes.duration_minutes.and_then(|d| i32::try_from(d).ok()))
         .fetch_optional(pool)
         .await?;
     Ok(row.map(Task::from))
@@ -186,10 +196,25 @@ pub async fn delete(pool: &PgPool, id: i64) -> Result<bool, sqlx::Error> {
 
 /// Weekday name (for example `Monday`) in [`APP_TZ`].
 pub async fn weekday(pool: &PgPool) -> Result<String, sqlx::Error> {
-    sqlx::query_scalar::<_, String>("SELECT to_char(now() AT TIME ZONE $1::text, 'FMDay')")
-        .bind(APP_TZ)
-        .fetch_one(pool)
-        .await
+    sqlx::query_scalar::<_, String>(
+        "SELECT to_char((now() AT TIME ZONE $1::text) - $2::interval, 'FMDay')",
+    )
+    .bind(APP_TZ)
+    .bind(DAY_CUTOFF)
+    .fetch_one(pool)
+    .await
+}
+
+/// Minutes since midnight in [`APP_TZ`], rounded up to the next whole minute
+/// (1:03:20 PM -> 784).
+pub async fn now_minutes(pool: &PgPool) -> Result<u32, sqlx::Error> {
+    let minutes = sqlx::query_scalar::<_, i32>(
+        "SELECT ceil(extract(epoch FROM (now() AT TIME ZONE $1::text)::time::interval) / 60)::int",
+    )
+    .bind(APP_TZ)
+    .fetch_one(pool)
+    .await?;
+    Ok(u32::try_from(minutes).unwrap_or(0))
 }
 
 async fn fetch_dated(pool: &PgPool, sql: &str, today: &str) -> Result<Vec<Task>, sqlx::Error> {

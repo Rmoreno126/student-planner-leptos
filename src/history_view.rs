@@ -233,6 +233,7 @@ mod tests {
             due_date: date.into(),
             slice_id: None,
             start_time: None,
+            duration_minutes: 15,
         }
     }
 

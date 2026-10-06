@@ -6,19 +6,18 @@ use leptos::prelude::*;
 use crate::slices::fmt_12h;
 
 /// Pixels of height per minute of the block.
-const PX_PER_MIN: f32 = 0.9;
+pub const PX_PER_MIN: f32 = 1.5;
 /// The shortest the block is drawn, so short events stay readable.
 const MIN_HEIGHT: f32 = 56.0;
 
-/// Hour label: "11 AM", or "10:50 AM" when it isn't on the hour.
+/// Hour label: "11 AM", or "4:50 PM" when it isn't on the hour.
 pub fn mark_label(minutes: u32) -> String {
     let full = fmt_12h(minutes);
+    let full = full.trim_start_matches('0');
     if minutes.is_multiple_of(60) {
         full.replacen(":00", "", 1)
-            .trim_start_matches('0')
-            .to_string()
     } else {
-        full
+        full.to_string()
     }
 }
 
@@ -40,7 +39,7 @@ pub fn block_height(start: u32, end: u32) -> f32 {
 
 /// The calendar-style picture for a blocked window, plus a "free from" line after it.
 #[component]
-pub fn BlockedTimeline(start: u32, end: u32) -> impl IntoView {
+pub fn BlockedTimeline(start: u32, end: u32, now: Option<u32>) -> impl IntoView {
     let height = block_height(start, end);
     let wrapper_style = format!("height:{height}px");
     let lines = marks(start, end)
@@ -51,6 +50,10 @@ pub fn BlockedTimeline(start: u32, end: u32) -> impl IntoView {
             view! { <div class="cal-hour" style=line_style><span>{mark_label(minute)}</span></div> }
         })
         .collect::<Vec<_>>();
+    let now_line = now.filter(|c| (start..end).contains(c)).map(|c| {
+        let style = format!("top:{}px", (c - start) as f32 * PX_PER_MIN);
+        view! { <div class="now-line" style=style></div> }
+    });
     let range = format!("{} – {}", fmt_12h(start), fmt_12h(end));
     let free = format!("✅ Free from {}", mark_label(end));
 
@@ -58,6 +61,7 @@ pub fn BlockedTimeline(start: u32, end: u32) -> impl IntoView {
         <div class="cal-block" style=wrapper_style>
             {lines}
             <div class="cal-event">{range}</div>
+            {now_line}
         </div>
         <p class="cal-free">{free}</p>
     }
@@ -80,11 +84,12 @@ mod tests {
         assert_eq!(mark_label(720), "12 PM");
         assert_eq!(mark_label(780), "1 PM");
         assert_eq!(mark_label(650), "10:50 AM");
+        assert_eq!(mark_label(1010), "4:50 PM");
     }
 
     #[test]
     fn short_blocks_keep_a_readable_height() {
-        assert!((block_height(600, 780) - 162.0).abs() < 0.01);
+        assert!((block_height(600, 780) - 270.0).abs() < 0.01);
         assert!((block_height(600, 610) - MIN_HEIGHT).abs() < 0.01);
     }
 }

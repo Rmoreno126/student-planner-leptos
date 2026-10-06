@@ -7,7 +7,7 @@ use leptos_router::{
     StaticSegment,
 };
 
-use crate::slices::{compute_slices, Block, DaySchedule, Slice, SliceKind};
+use crate::slices::{compute_slices, Block, DaySchedule, Slice};
 
 /// Default weekly schedule used by the student planner.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,14 +138,15 @@ use leptos_router::hooks::use_query_map;
 use crate::api::{
     add_task, delete_task, get_day, list_daily, toggle_complete, toggle_rollover, update_task,
 };
+use crate::board::DayTimeline;
 use crate::checklist::{checklist_progress, toggle_checkbox};
 use crate::editor_modal::{blank_task, EditModal};
 use crate::history_view::HistoryView;
 use crate::model::{DayData, NewTask, Priority, Task, TaskUpdate};
 use crate::notes::{render_markdown, split_notes, NoteBlock};
+use crate::plan::{fit_label, layout_day, move_target, now_clock};
 use crate::schedule_view::ScheduleEditor;
 use crate::slices::{blocked_at, fmt_12h, open_slice_id_at, parse_hhmm};
-use crate::timeline::BlockedTimeline;
 
 /// Which tab is showing.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -263,6 +264,8 @@ fn DailyView() -> impl IntoView {
 #[component]
 fn DayPlan(data: DayData) -> impl IntoView {
     let wake = data.wake;
+    let now = data.now;
+    let scrolled = RwSignal::new(false);
     let day_schedule = DaySchedule {
         blocks: data
             .blocks
@@ -304,6 +307,9 @@ fn DayPlan(data: DayData) -> impl IntoView {
                             <SliceBoard
                                 slices=slices
                                 tasks=list
+                                wake=wake
+                                now=now
+                                scrolled=scrolled
                                 refresh=refresh
                                 error=error
                                 editing=editing
@@ -334,7 +340,7 @@ fn DayPlan(data: DayData) -> impl IntoView {
 
 /// Runs a server call in the background, then reloads the task list.
 /// Errors are shown above the list instead of being swallowed.
-fn run<T, F>(refresh: RwSignal<u32>, error: RwSignal<Option<String>>, call: F)
+pub(crate) fn run<T, F>(refresh: RwSignal<u32>, error: RwSignal<Option<String>>, call: F)
 where
     T: 'static,
     F: Future<Output = Result<T, ServerFnError>> + 'static,
@@ -388,6 +394,7 @@ fn AddTaskForm(
             due_date: None,
             slice_id,
             start_time: minutes,
+            duration_minutes: crate::model::DEFAULT_DURATION,
         };
         title.set(String::new());
         run(refresh, error, add_task(new));
@@ -433,70 +440,28 @@ fn AddTaskForm(
     }
 }
 
-/// One card per slice, then unassigned tasks, then the completed card.
+/// Today as one timeline, then unassigned tasks and the completed card.
+#[allow(clippy::too_many_arguments)]
 #[component]
 fn SliceBoard(
     slices: Vec<Slice>,
     tasks: Vec<Task>,
+    wake: u32,
+    now: Option<u32>,
+    scrolled: RwSignal<bool>,
     refresh: RwSignal<u32>,
     error: RwSignal<Option<String>>,
     editing: RwSignal<Option<Task>>,
 ) -> impl IntoView {
-    let (mut done, mut active): (Vec<Task>, Vec<Task>) =
-        tasks.into_iter().partition(|t| t.completed);
-    active.sort_by_key(|t| (t.start_time.unwrap_or(u32::MAX), t.id));
+    let (mut done, active): (Vec<Task>, Vec<Task>) = tasks.into_iter().partition(|t| t.completed);
     done.sort_by_key(|t| (t.start_time.unwrap_or(u32::MAX), t.id));
 
-    let open_ids: Vec<String> = slices
-        .iter()
-        .filter(|s| s.kind == SliceKind::Open)
-        .map(|s| s.id.clone())
-        .collect();
-    // A task belongs to its slice only if that slice exists today.
-    let target = |t: &Task| -> Option<String> {
-        match &t.slice_id {
-            Some(id) if open_ids.contains(id) => Some(id.clone()),
-            _ => None,
-        }
-    };
+    let clock = now.map(now_clock);
+    let target = clock.and_then(|c| move_target(&slices, c));
+    let day = layout_day(&slices, active, wake, now);
+    let fit_line = fit_label(day.fit).map(|text| view! { <p class="fit-line">{text}</p> });
 
-    let cards = slices
-        .iter()
-        .map(|slice| {
-            if slice.kind == SliceKind::Blocked {
-                view! {
-                    <div class="slice-card blocked">
-                        <div class="slice-header">
-                            <span class="slice-title">{slice.label.clone()}</span>
-                        </div>
-                        <BlockedTimeline start=slice.start end=slice.end/>
-                    </div>
-                }
-                .into_any()
-            } else {
-                let mine: Vec<Task> = active
-                    .iter()
-                    .filter(|t| target(t).as_deref() == Some(slice.id.as_str()))
-                    .cloned()
-                    .collect();
-                view! {
-                    <div class="slice-card">
-                        <div class="slice-header">
-                            <span class="slice-title">{slice.label.clone()}</span>
-                        </div>
-                        <TaskList tasks=mine refresh=refresh error=error editing=editing/>
-                    </div>
-                }
-                .into_any()
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let loose: Vec<Task> = active
-        .iter()
-        .filter(|t| target(t).is_none())
-        .cloned()
-        .collect();
+    let loose = day.unassigned;
     let loose_card = (!loose.is_empty()).then(|| {
         view! {
             <div class="slice-card">
@@ -518,7 +483,20 @@ fn SliceBoard(
     });
 
     view! {
-        <div class="slices-wrapper">{cards}{loose_card}</div>
+        {fit_line}
+        <div class="slices-wrapper">
+            <DayTimeline
+                slices=slices
+                plans=day.plans
+                clock=clock
+                target=target
+                scrolled=scrolled
+                refresh=refresh
+                error=error
+                editing=editing
+            />
+            {loose_card}
+        </div>
         {done_card}
     }
 }
@@ -671,6 +649,7 @@ fn NotesView(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::slices::SliceKind;
 
     #[test]
     fn default_schedule_matches_weekday_blocks() {

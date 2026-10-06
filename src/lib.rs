@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod api;
+pub mod board;
 pub mod checklist;
 #[cfg(feature = "ssr")]
 pub mod db;
@@ -9,6 +10,7 @@ pub mod editor_modal;
 pub mod history_view;
 pub mod model;
 pub mod notes;
+pub mod plan;
 pub mod schedule_view;
 pub mod slices;
 pub mod snippets;

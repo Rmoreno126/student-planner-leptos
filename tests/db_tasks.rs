@@ -15,6 +15,7 @@ fn new_task(title: &str) -> NewTask {
         due_date: None,
         slice_id: None,
         start_time: None,
+        duration_minutes: 15,
     }
 }
 
@@ -88,6 +89,7 @@ async fn update_ignores_blank_title(pool: PgPool) -> sqlx::Result<()> {
         title: Some("   ".into()),
         notes: Some("see syllabus".into()),
         priority: Some(Priority::Low),
+        duration_minutes: None,
     };
     let changed = db::update(&pool, task.id, &changes)
         .await?
@@ -267,5 +269,28 @@ async fn day_limits_default_then_save(pool: PgPool) -> sqlx::Result<()> {
     assert_eq!(db::day_limits(&pool).await?, (420, 1380));
     let schedule = db::get_schedule(&pool).await?;
     assert_eq!((schedule.wake, schedule.sleep), (420, 1380));
+    Ok(())
+}
+
+#[sqlx::test]
+async fn duration_saves_and_updates(pool: PgPool) -> sqlx::Result<()> {
+    let today = db::today(&pool).await?;
+    let task = db::insert(&pool, &new_task("stretch"), &today).await?;
+    assert_eq!(task.duration_minutes, 15);
+    let changes = TaskUpdate {
+        duration_minutes: Some(45),
+        ..TaskUpdate::default()
+    };
+    let changed = db::update(&pool, task.id, &changes)
+        .await?
+        .expect("task exists");
+    assert_eq!(changed.duration_minutes, 45);
+    assert_eq!(changed.title, "stretch");
+    Ok(())
+}
+
+#[sqlx::test]
+async fn now_is_a_minute_of_the_day(pool: PgPool) -> sqlx::Result<()> {
+    assert!(db::now_minutes(&pool).await? <= 1440);
     Ok(())
 }

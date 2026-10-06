@@ -56,6 +56,8 @@ pub struct Task {
     pub slice_id: Option<String>,
     /// Start time in minutes since midnight.
     pub start_time: Option<u32>,
+    /// Planned length in minutes (15 by default).
+    pub duration_minutes: u32,
 }
 
 /// Fields needed to create a task.
@@ -68,6 +70,8 @@ pub struct NewTask {
     pub due_date: Option<String>,
     pub slice_id: Option<String>,
     pub start_time: Option<u32>,
+    /// Planned length in minutes (15 by default).
+    pub duration_minutes: u32,
 }
 
 /// Partial update. `None` fields are left unchanged; a blank title is ignored.
@@ -76,10 +80,15 @@ pub struct TaskUpdate {
     pub title: Option<String>,
     pub notes: Option<String>,
     pub priority: Option<Priority>,
+    pub duration_minutes: Option<u32>,
 }
 
 /// Largest start time allowed (47:59, so bedtimes past midnight fit).
 pub const MAX_START_TIME: u32 = 2879;
+/// A new task's length when none is chosen.
+pub const DEFAULT_DURATION: u32 = 15;
+/// Longest allowed task: a whole day.
+pub const MAX_DURATION: u32 = 1440;
 
 impl NewTask {
     /// Checks the fields before they reach the database.
@@ -100,6 +109,9 @@ impl NewTask {
             if time > MAX_START_TIME {
                 return Err("Start time is out of range".into());
             }
+        }
+        if !(1..=MAX_DURATION).contains(&self.duration_minutes) {
+            return Err("Duration must be between 1 minute and 24 hours".into());
         }
         Ok(())
     }
@@ -199,6 +211,8 @@ pub struct DayData {
     pub sleep: u32,
     pub blocks: Vec<ScheduleBlock>,
     pub divisions: Vec<u32>,
+    /// Current minute of the day, only when this is today's plan (not a preview).
+    pub now: Option<u32>,
 }
 
 /// Checks a block's name and times.
@@ -255,6 +269,7 @@ impl Schedule {
             sleep: self.sleep,
             blocks,
             divisions,
+            now: None,
         }
     }
 }
@@ -271,7 +286,19 @@ mod tests {
             due_date: None,
             slice_id: None,
             start_time: None,
+            duration_minutes: DEFAULT_DURATION,
         }
+    }
+
+    #[test]
+    fn duration_must_be_between_one_minute_and_a_day() {
+        let mut t = task("read");
+        t.duration_minutes = 0;
+        assert!(t.validate().is_err());
+        t.duration_minutes = MAX_DURATION;
+        assert!(t.validate().is_ok());
+        t.duration_minutes = MAX_DURATION + 1;
+        assert!(t.validate().is_err());
     }
 
     #[test]

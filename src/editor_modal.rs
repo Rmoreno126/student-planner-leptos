@@ -32,6 +32,7 @@ pub fn blank_task() -> Task {
         due_date: String::new(),
         slice_id: None,
         start_time: None,
+        duration_minutes: crate::model::DEFAULT_DURATION,
     }
 }
 
@@ -373,6 +374,7 @@ pub fn EditModal(
                     due_date: None,
                     slice_id,
                     start_time: minutes,
+                    duration_minutes: crate::model::DEFAULT_DURATION,
                 })
                 .await
             } else {
@@ -383,6 +385,7 @@ pub fn EditModal(
                             title: Some(new_title),
                             notes: Some(notes_text),
                             priority: Some(level),
+                            duration_minutes: None,
                         },
                     )
                     .await?;

@@ -165,7 +165,11 @@ pub async fn get_day(preview: Option<String>) -> Result<DayData, ServerFnError> 
     let index = crate::model::weekday_index(&chosen).unwrap_or(0);
     let date = (chosen == today_name).then_some(today.as_str());
     let schedule = crate::db::get_schedule(pool).await.map_err(fail)?;
-    Ok(schedule.day(&chosen, index, date))
+    let mut data = schedule.day(&chosen, index, date);
+    if chosen == today_name {
+        data.now = Some(crate::db::now_minutes(pool).await.map_err(fail)?);
+    }
+    Ok(data)
 }
 
 /// The whole schedule for the Weekly Schedule tab.
